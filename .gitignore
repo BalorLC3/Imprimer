@@ -4,3 +4,4 @@ IMPRIMER.md
 /__pycache__
 .env.example
 logs/
+*.pyc

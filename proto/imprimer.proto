@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package imprimer;
 
-option go_package = "github.com/BalorLC3/Imprimer/gateway";
+option go_package = "github.com/BalorLC3/Imprimer/gateway/gen";
 
 service PromptEngine { // Go calls into Python for this service
     rpc EvaluatePrompt(EvaluateRequest) returns (EvaluateResponse);
@@ -14,7 +14,7 @@ message EvaluateRequest{
     string task       = 2; // e.g. "summarize", "classify", "extract"
     string input      = 3; // actual quest
     string variant_a  = 4; // 1st prompt template to test
-    string vaiant_b   = 5; // 2nd prompt template to test
+    string variant_b   = 5; // 2nd prompt template to test
 }
 
 // Python -> Go
