@@ -85,13 +85,12 @@ GET /best?task=summarize
 
 ---
 
-## 💡 Why It Matters
+### Why It Matters
 
 * Prompt engineering is mostly trial-and-error → now measurable
 * Small prompt changes can drastically shift outputs → now optimizable
 * Teams forget what worked → now persistent and queryable
 
----
 
 ## 🚀 Quickstart
 
