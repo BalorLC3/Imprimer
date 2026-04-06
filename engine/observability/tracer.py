@@ -57,9 +57,6 @@ def reachability_gap_report(
 ) -> str:
     """
     Generates a plain-language explanation of the controllability gap.
-    This is Option C from the roadmap — the Minsky framing made
-    visible to the caller so they understand not just *which* prompt
-    won but *why* and *how much room for improvement remains*.
 
     baseline: the paper's theoretical upper bound (0.97 for ≤10-token prompts).
     """
