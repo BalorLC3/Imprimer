@@ -9,7 +9,7 @@ It measures how much control your prompt has over a model’s output—and helps
 
 Inspired by *The Society of Mind*, Imprimer assumes intelligence is emergent—and prompts don’t instruct a model, they **activate configurations** within it. This system makes those activations measurable, comparable, and optimizable.
 
----
+
 
 ## 🔬 Theoretical Foundation
 
@@ -22,12 +22,12 @@ Key result:
 **Imprimer’s goal:**
 Close the gap between your current prompt and that theoretical ceiling.
 
----
+
 
 ## ✨ System Highlights
 
 | Metric             | Value          | Detail                               |
-| :----------------- | :------------- | :----------------------------------- |
+| :-- | :- | :-- |
 | **Architecture**   | 2 Services     | Go gateway + Python ML engine (gRPC) |
 | **Observability**  | 3 Metrics      | Reachability, latency, length        |
 | **Baseline Score** | ~0.65–0.69     | On `qwen2.5:1.5b`                    |
@@ -35,7 +35,7 @@ Close the gap between your current prompt and that theoretical ceiling.
 | **Tracing**        | Distributed    | 1 trace ID per request               |
 | **Deployment**     | 1 Command      | `docker compose up --build`          |
 
----
+
 
 ## ⚙️ Architecture
 
@@ -60,7 +60,7 @@ POST /prompt
       └── Storage (SQLite)
 ```
 
----
+
 
 ## 🧮 Control Score (Reachability)
 
@@ -83,7 +83,7 @@ GET /best?task=summarize
 
 → returns the highest-control prompt historically.
 
----
+
 
 ### Why It Matters
 
@@ -126,7 +126,7 @@ curl -X POST http://localhost:8080/prompt \
 curl "http://localhost:8080/best?task=summarize"
 ```
 
----
+
 
 ## 🗺️ Roadmap
 
@@ -151,7 +151,7 @@ curl "http://localhost:8080/best?task=summarize"
 * Auth integration (JWT)
 * Air-gapped deployment
 
----
+
 
 ## 📚 References
 
