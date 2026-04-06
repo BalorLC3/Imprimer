@@ -12,14 +12,31 @@ Inspired by *The Society of Mind*, Imprimer assumes intelligence is emergent and
 
 ## 🔬 Theoretical Foundation
 
-Based on *"What's the Magic Word? A Control Theory of LLM Prompting"* (Bhargava et al., 2023).
+Imprimer is grounded in recent work such as “What’s the Magic Word? A Control Theory of LLM Prompting” (2023), which frames prompting as a __control problem over autoregressive sequence models__.
 
-Key result:
+In this view:
 
-> For prompts ≤ 10 tokens, the correct next token is reachable ~97% of the time.
+- The LLM defines a stochastic dynamical system over token sequences
+- A prompt acts as a control input, steering the trajectory of generation
+- The objective is to maximize the probability mass assigned to desired outputs
 
-**Imprimer’s goal:**
-Close the gap between your current prompt and that theoretical ceiling.
+A key empirical result from the paper shows that for short prompts (≤10 tokens), target tokens are often reachable within the model’s distribution, implying that failures are frequently due to suboptimal control inputs, not model limitations.
+
+#### From Theory to Metric
+
+Imprimer operationalizes this idea via a token-level controllability proxy:
+
+For each generated token, we measure how much probability mass is concentrated on the chosen output relative to its local alternatives.
+
+This yields the Reachability Index, defined as the average normalized probability:
+
+- High values → the prompt strongly constrains the model (high control)
+- Low values → the model remains diffuse (weak control)
+
+This metric approximates:
+
+- Controllability: how effectively a prompt steers generation
+- Observability: how predictable the model’s response is under perturbations
 
 
 
