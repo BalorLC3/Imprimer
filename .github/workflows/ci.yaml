@@ -26,6 +26,7 @@ jobs:
 
       - name: Regenerate proto
         run: |
+          mkdir -p gateway/gen
           protoc -I proto \
             --go_out=gateway/gen \
             --go-grpc_out=gateway/gen \
@@ -59,6 +60,7 @@ jobs:
 
       - name: Regenerate proto
         run: |
+          mkdir -p engine
           python -m grpc_tools.protoc \
             -I proto \
             --python_out=engine \
