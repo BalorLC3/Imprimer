@@ -4,10 +4,9 @@
 
 **Imprimer** is a prompt control and observability platform that treats LLM prompts as **control inputs to a dynamical system**.
 
-**In one line:**
-It measures how much control your prompt has over a model’s output—and helps you improve it.
+It measures how much control your prompt has over a model’s output and helps you improve it.
 
-Inspired by *The Society of Mind*, Imprimer assumes intelligence is emergent—and prompts don’t instruct a model, they **activate configurations** within it. This system makes those activations measurable, comparable, and optimizable.
+Inspired by *The Society of Mind*, Imprimer assumes intelligence is emergent and prompts don’t instruct a model, they **activate configurations** within it. This system makes those activations measurable, comparable, and optimizable.
 
 
 
@@ -106,7 +105,7 @@ GET /best?task=summarize
 docker compose up --build
 ```
 
-### Evaluate Prompts
+### Evaluate Prompts (in development)
 
 ```bash
 curl -X POST http://localhost:8080/prompt \
