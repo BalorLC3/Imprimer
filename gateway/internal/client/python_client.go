@@ -38,3 +38,7 @@ func (c *PythonClient) Close() error {
 func (c *PythonClient) Best(ctx context.Context, req *gen.BestRequest) (*gen.BestResponse, error) {
 	return c.stub.BestVariant(ctx, req)
 }
+
+func (c *PythonClient) Optimize(ctx context.Context, req *gen.OptimizeRequest) (*gen.OptimizeResponse, error) {
+	return c.stub.OptimizedPrompt(ctx, req)
+}

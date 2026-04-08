@@ -6,6 +6,7 @@ import (
 
 	gen "github.com/BalorLC3/Imprimer/gateway/gen"
 	"github.com/BalorLC3/Imprimer/gateway/internal/client"
+	"github.com/BalorLC3/Imprimer/gateway/internal/httpx"
 	"github.com/BalorLC3/Imprimer/gateway/internal/middleware"
 )
 
@@ -82,6 +83,5 @@ func (h *PromptHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ScoreA:   grpcResp.ScoreA,
 		ScoreB:   grpcResp.ScoreB,
 	}
-	w.Header().Set("Content-Tyoe", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	httpx.WriteJSON(w, http.StatusOK, resp)
 }
