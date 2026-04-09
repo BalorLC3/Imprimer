@@ -79,7 +79,7 @@ def _run_ollama(prompt_text: str) -> VariantResult:
     so the scorer receives identical input regardless of backend.
     """
     base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    model = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b")
+    model = os.getenv("OLLAMA_MODEL")
 
 
     payload = {

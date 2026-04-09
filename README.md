@@ -125,7 +125,8 @@ GET /best?task=summarize
 docker compose up --build
 ```
 
-### Evaluate Prompts (in development)
+### Prompts (in development)
+**Evaluate**:
 
 ```bash
 curl -X POST http://localhost:8080/prompt \
@@ -135,6 +136,20 @@ curl -X POST http://localhost:8080/prompt \
     "input": "Your input text here",
     "variant_a": "Summarize this in one sentence: {input}",
     "variant_b": "You are an expert writer. Give a precise one sentence summary of: {input}",
+    "backend": "ollama"
+  }'
+```
+
+**Optimize**:
+```bash
+curl -X POST http://localhost:8080/optimize \
+  -H "Content-Type: application/json" \
+  -d '{
+    "task": "summarize",
+    "base_prompt": "Summarize this in one sentence: {input}",
+    "input_example": "Minsky argued intelligence emerges from many small agents none of which is intelligent alone",
+    "expected_output": "Minsky argued that intelligence is an emergent property of simple interacting agents.",
+    "n_trials": 3,
     "backend": "ollama"
   }'
 ```
