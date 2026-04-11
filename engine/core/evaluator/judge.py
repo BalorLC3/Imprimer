@@ -66,13 +66,8 @@ def _parse_scores(text: str) -> dict:
 
 
 def _run_judge_ollama(prompt_text: str) -> str:
-    """
-    Runs the judge prompt through Ollama.
-    Reuses the same /api/chat call pattern as _run_ollama in prompt_chain.py
-    but without logprobs  the judge only needs the text response.
-    """
-    base_url = os.getenv("OLLAMA_BASE_URL")
-    model = os.getenv("OLLAMA_MODEL")
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    model = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b")
 
     payload = {
         "model": model,
@@ -89,7 +84,9 @@ def _run_judge_ollama(prompt_text: str) -> str:
         timeout=60,
     )
     resp.raise_for_status()
-    return resp.json().get("message", {}).get("content", "")
+    content = resp.json().get("message", {}).get("content", "")
+    # print(f"RAW JUDGE RESPONSE: {repr(content)}")  
+    return content
 
 
 def _run_judge_openai(prompt_text: str) -> str:
