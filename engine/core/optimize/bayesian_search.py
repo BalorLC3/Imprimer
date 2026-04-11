@@ -34,10 +34,10 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 # Categorical search space
 MUTATIONS = {
-    "concise":      lambda p: p + "\nBe concise.",
-    "precise":      lambda p: p + "\nBe precise and factual.",
+    "concise":      lambda p: p + "\nBe concise.",                          # Zero-shot learning 
+    "precise":      lambda p: p + "\nBe precise and factual.",              # One-shot "
     "structured":   lambda p: p + "\nReturn structured output.",
-    "stepbystep":   lambda p: p + "\nThink step by step before answering.",
+    "stepbystep":   lambda p: p + "\nThink step by step before answering.", # Few-shot "
     "expert":       lambda p: "You are an expert. " + p,
     "no_fluff":     lambda p: p + "\nAvoid unnecessary words.",
     "rewrite_sum":  lambda p: p.replace("Summarize", "Concisely summarize"),
