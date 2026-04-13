@@ -1,6 +1,8 @@
 <p align="center">
   <h1 align="center">Imprimer</h1>
-  <img src="docs/assets/imprimer.drawio.png" height=190 style="display: block; margin: 0 auto;">
+  <div style="text-align: center;">
+    <img src="docs/assets/imprimer.drawio.png" height="190" alt="Description">
+  </div>
   <p align="center">Prompt control and observability platform for LLMs</p>
   <p align="center">
     <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT">
@@ -44,8 +46,10 @@ The **Reachability Index** is the average certainty across all output tokens:
 | `0.97` | Paper's theoretical upper bound for prompts ≤ 10 tokens |
 | `~0.2` | Weak control — five tokens equally likely at each position |
 
-The gap between your prompt's reachability and `0.97` is the optimization target.
-
+The gap between your prompt's reachability and `0.97` is the optimization target. In the next diagram $u$ is what steers behavior.
+<div style="text-align: center;">
+  <img src="docs/assets/llmcontrol.drawio.png" height="220" alt="LLMs control framework">
+</div>
 
 ## Architecture
 
@@ -447,7 +451,6 @@ protoc -I proto \
 ### Phase 2 — Observability ✓
 - [x] Prometheus metrics (`/metrics`) — reachability, judge score, improvement
 - [x] Structured JSON audit trace — correlated by trace ID across services
-- [ ] Grafana dashboard for reachability trends over time
 - [ ] `/trend?task=X` — reachability over time endpoint
 
 ### Phase 3 — Intelligence (next)
@@ -459,8 +462,7 @@ protoc -I proto \
 ### Phase 4 — Scale
 - [ ] PostgreSQL backend — replace SQLite for multi-instance deployments
 - [ ] JWT authentication — scoped access per team
-- [ ] Air-gapped deployment — single binary with embedded model for plant-floor use
-- [ ] `imprimer ui` — TensorBoard-style dashboard reading from registry
+- [ ] `imprimer ui` — TensorBoard-style dashboard, reads directly from registry
 
 ---
 
