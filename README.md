@@ -53,12 +53,12 @@ The gap between your prompt's reachability and `0.97` is the optimization target
   <img src="docs/assets/llmcontrol.drawio.png" height="220" alt="LLMs control framework">
 </p>
 
-## Architecture (high level)
+## Architecture 
 
 Imprimer is two services connected by a gRPC contract. The proto file is the single source of truth — Go and Python never share code, only the contract.
 
 <p align="center">
-  <img src="docs/assets/architecture.drawio.png" height="220" alt="LLMs control framework">
+  <img src="docs/assets/architecture.drawio.png" height="700" alt="LLMs control framework">
 </p>
 
 **Go handles:** HTTP ingress, authentication, audit logging, Prometheus metrics, gRPC routing. Go's goroutine model handles concurrent LLM requests efficiently.
