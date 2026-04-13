@@ -1,11 +1,12 @@
+﻿# Imprimer: prompt control and observability platform
+
 <!Badges>
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 
 <div style="text-align: center;">
-<img src="docs/assets/llmcontrol.drawio.png" alt="Control in prompt engineering" ppx=>   
+  <img src="docs/assets/imprimer.drawio.png" alt="Control in prompt engineering", height=200>   
 </div>
 
-# Imprimer
 
 > *"To imprint a mental pattern."*
 
@@ -15,7 +16,11 @@ It measures how much control your prompt has over a model’s output and helps y
 
 Inspired by *The Society of Mind*, Imprimer assumes intelligence is emergent and prompts don’t instruct a model, they **activate configurations** within it. This system makes those activations measurable, comparable, and optimizable.
 
+In the next graph $u$ is how we steer the behavior of the agent.
 
+<div style="text-align: center;">
+  <img src="docs/assets/llmcontrol.drawio.png" alt="Control in prompt engineering", height=280>   
+</div>
 
 ## 🔬 Theoretical Foundation
 
@@ -83,7 +88,35 @@ POST /prompt
       └── Storage (SQLite)
 ```
 
+## CLI usage
 
+Imprimer can also be started directly from the command line without Docker.
+
+### Start the Python engine
+
+```bash
+cd engine
+python main.py
+```
+
+This launches the gRPC engine on `:50051`.
+
+### Start the Go gateway
+
+```bash
+go run gateway/cmd/main.go
+```
+
+The gateway listens on `:8080` and forwards requests to the engine.
+
+### CLI environment variables
+
+- `ENGINE_ADDR` — engine address for the gateway, default `localhost:50051`
+- `OPENAI_API_KEY` — optional OpenAI API key for the OpenAI backend
+- `OPENAI_MODEL` — default `gpt-4o-mini`
+- `OLLAMA_MODEL` — default `qwen2.5:1.5b`
+- `OLLAMA_BASE_URL` — default `http://host.docker.internal:11434`
+- `IMPRIMER_API_KEY` — optional gateway auth key
 
 ## 🧮 Control Score (Reachability)
 
