@@ -1,7 +1,9 @@
 <p align="center">
   <h1 align="center">Imprimer</h1>
   <div style="text-align: center;">
-    <img src="docs/assets/imprimer.drawio.png" height="190" alt="Description">
+    <p>
+      <img src="docs/assets/imprimer.drawio.png" height="190"/>
+    </p>
   </div>
   <p align="center">Prompt control and observability platform for LLMs</p>
   <p align="center">
