@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">Imprimer</h1>
-  <div style="text-align: center;">
-    <p>
+  <div>
+    <p align="center">
       <img src="docs/assets/imprimer.drawio.png" height="190"/>
     </p>
   </div>
@@ -49,9 +49,9 @@ The **Reachability Index** is the average certainty across all output tokens:
 | `~0.2` | Weak control — five tokens equally likely at each position |
 
 The gap between your prompt's reachability and `0.97` is the optimization target. In the next diagram $u$ is what steers behavior.
-<div style="text-align: center;">
+<p align="center">
   <img src="docs/assets/llmcontrol.drawio.png" height="220" alt="LLMs control framework">
-</div>
+</p>
 
 ## Architecture
 
