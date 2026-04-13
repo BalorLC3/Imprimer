@@ -14,13 +14,13 @@
   </p>
 </p>
 
----
+
 
 > *"To imprint a mental pattern."*
 >
 > Inspired by Minsky's *The Society of Mind* (1986): a prompt does not instruct a unified intelligence — it **activates a specific configuration** of the model's internal society. Imprimer makes that activation measurable, comparable, and improvable over time.
 
----
+
 
 ## What it does
 
@@ -53,37 +53,13 @@ The gap between your prompt's reachability and `0.97` is the optimization target
   <img src="docs/assets/llmcontrol.drawio.png" height="220" alt="LLMs control framework">
 </p>
 
-## Architecture
+## Architecture (high level)
 
 Imprimer is two services connected by a gRPC contract. The proto file is the single source of truth — Go and Python never share code, only the contract.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                         CLI / curl                           │
-│              imprimer evaluate / optimize / best             │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ HTTP :8080
-┌──────────────────────────▼──────────────────────────────────┐
-│                      Go Gateway                              │
-│   Auth · Audit (trace ID) · Rate limit · Prometheus metrics  │
-│   /prompt  /optimize  /best  /metrics  /health               │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ gRPC :50051
-┌──────────────────────────▼──────────────────────────────────┐
-│                    Python Engine                             │
-│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  │
-│  │  Security   │  │   Chains     │  │    Optimizer       │  │
-│  │  (inject.)  │  │  (LangChain) │  │  (Optuna TPE)      │  │
-│  └─────────────┘  └──────────────┘  └────────────────────┘  │
-│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  │
-│  │   Scorer    │  │    Judge     │  │    Registry        │  │
-│  │ (reachabil.)│  │ (LLM-as-j.)  │  │   (SQLite)         │  │
-│  └─────────────┘  └──────────────┘  └────────────────────┘  │
-│  ┌───────────────────────────────────────────────────────┐   │
-│  │           Observability (structured JSON trace)        │   │
-│  └───────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="docs/assets/architecture.drawio.png" height="220" alt="LLMs control framework">
+</p>
 
 **Go handles:** HTTP ingress, authentication, audit logging, Prometheus metrics, gRPC routing. Go's goroutine model handles concurrent LLM requests efficiently.
 
@@ -91,7 +67,7 @@ Imprimer is two services connected by a gRPC contract. The proto file is the sin
 
 **The boundary:** `proto/imprimer.proto` — three RPCs, never more complexity than needed.
 
----
+
 
 ## Quickstart
 
@@ -126,7 +102,7 @@ Or build locally:
 go install ./gateway/cmd/imprimer/
 ```
 
----
+
 
 ## CLI reference
 
@@ -140,7 +116,7 @@ The primary interface to Imprimer. All commands talk to the gateway over HTTP �
 --json             Raw JSON output instead of formatted text
 ```
 
----
+
 
 ### `imprimer evaluate`
 
@@ -230,7 +206,7 @@ Output:
 | `rewrite_sum` | Replaces "Summarize" with "Concisely summarize" |
 | `rewrite_exp` | Replaces "Explain" with "Clearly explain" |
 
----
+
 
 ### `imprimer best`
 
@@ -259,7 +235,7 @@ This is the feedback loop closing. After running `evaluate` and `optimize` multi
 | `--task` | Task type to query |
 | `--limit` | Number of recent evaluations to sample (default 10) |
 
----
+
 
 ## API reference
 
@@ -353,7 +329,7 @@ curl http://localhost:8080/health
 # {"status":"ok","service":"imprimer-gateway"}
 ```
 
----
+
 
 ## Observability
 
@@ -383,7 +359,7 @@ trace=9bc004ea method=POST path=/prompt duration=7.2s
 
 One UUID. Complete picture across both services.
 
----
+
 
 ## Security
 
@@ -396,7 +372,7 @@ Every request passes through the security layer before any LLM interaction:
 
 ISO 27001 alignment: A.9 (access control), A.12.6 (vulnerability management), A.14.2 (security in development).
 
----
+
 
 ## Development
 
@@ -441,7 +417,7 @@ protoc -I proto \
 | `OPENAI_MODEL` | `gpt-4o-mini` | OpenAI model |
 | `IMPRIMER_API_KEY` | — | Gateway bearer token (leave empty to disable) |
 
----
+
 
 ## Roadmap
 
@@ -466,7 +442,7 @@ protoc -I proto \
 - [ ] JWT authentication — scoped access per team
 - [ ] `imprimer ui` — TensorBoard-style dashboard, reads directly from registry
 
----
+
 
 ## References
 
@@ -476,7 +452,7 @@ protoc -I proto \
 - OWASP Top 10 for LLM Applications · [owasp.org](https://owasp.org/www-project-top-10-for-large-language-model-applications/)
 - Optuna: A Next-generation Hyperparameter Optimization Framework · [optuna.org](https://optuna.org)
 
----
+
 
 ## License
 
