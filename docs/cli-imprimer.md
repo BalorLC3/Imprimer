@@ -1,7 +1,7 @@
 
 ## CLI reference
 
-The primary interface to Imprimer. All commands talk to the gateway over HTTP — works with Docker or a remote deployment.
+The primary interface to Imprimer. All commands talk to the gateway over HTTP, works with Docker or a remote deployment (which is the future objective).
 
 ### Global flags
 
@@ -53,7 +53,7 @@ Output:
 
 Run Bayesian optimization (Optuna TPE) over a mutation space to find the prompt that maximizes reachability + similarity to an expected output.
 
-Each trial costs one LLM inference call. TPE bootstraps with random exploration for the first `n/4` trials, then exploits patterns — which mutations scored highest — for the remainder.
+Each trial costs one LLM inference call. TPE bootstraps with random exploration for the first `n/4` trials, then exploits patterns which mutations scored highest for the remainder.
 
 ```bash
 imprimer optimize \
@@ -123,7 +123,7 @@ Output:
   Be concise.
 ```
 
-This is the feedback loop closing. After running `evaluate` and `optimize` multiple times, `best` surfaces what the system has learned — no manual review required.
+This is the feedback loop closing. After running `evaluate` and `optimize` multiple times, `best` surfaces what the system has learned, so no manual review is required.
 
 | Flag | Description |
 |---|---|
