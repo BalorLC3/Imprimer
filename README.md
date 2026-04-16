@@ -55,7 +55,7 @@ The gap between your prompt's reachability and `0.97` is the optimization target
 
 ## Architecture 
 
-Imprimer is two services connected by a gRPC contract. The proto file is the single source of truth, so in that way Go and python never share code, only the contract.
+Imprimer is two services connected by a gRPC contract. The proto file is the single source of truth, so in that way Go and python never share code, only the contract. The following diagram provides a high level visualization of the information flow in the platform, the orchestator cycle integrates the **reflective agent** pattern. The reflection (evaluation) node analyzes outputs and returns feedback as HumanMessage, creating the improvement loop.
 
 <p align="center">
   <img src="docs/assets/show-arch.drawio.png" height="350" alt="LLMs control framework">
