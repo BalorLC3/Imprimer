@@ -24,54 +24,41 @@ LATENCY_BUDGET_MS = 1000.0
 TARGET_LENGTH = 300
 
 
-def _compute_reachability(logprobs: list) -> float:
+def _compute_reachability(logprobs: list, target_tokens: list[str] | None = None) -> float:
     """
-    Computes the reachability index from token logprobs.
+    Approximates reachability as defined in Bhargava et al. Theorem 4.2.
 
-    The Bhargava et al. paper defines reachability as whether the target
-    token appears in the top-k reachable tokens at each position. We
-    approximate this empirically: for each output token, we measure how
-    much probability mass sits in the top-5 candidates vs the chosen token.
+    True reachability is geometric: Y* is reachable iff the orthogonal
+    component of the no-prompt output to Y* is within the prompt's steering
+    budget k*gamma. We approximate this empirically via logprobs:
 
-    A high reachability score means the model was "certain" - the prompt
-    steered it strongly toward a narrow region of the output distribution.
-    A low score means the model was diffuse - the prompt left too much
-    of the distribution reachable, which means weak control.
+    For each output position, we ask: was the chosen token among the
+    high-probability candidates? A token with logprob > threshold was
+    "reachable" —> the prompt successfully steered the distribution toward it.
+    A token that required logprob < threshold to be chosen suggests the
+    prompt had to work against the model's prior, approaching unreachability.
 
-    Returns 0.5 as a neutral fallback when logprobs are unavailable,
-    so the combined score degrades gracefully rather than erroring.
     """
     if not logprobs:
-        return 0.5  # neutral fallback - no logprob data available
-
-    token_certainties = []
-    for token_data in logprobs:
-        chosen_logprob = token_data.get("logprob", -10.0)
-        chosen_prob = math.exp(chosen_logprob)
-
-        # Top candidates at this position
-        top = token_data.get("top", [])
-        if not top:
-            token_certainties.append(chosen_prob)
-            continue
-
-        # Sum of probability mass across all top candidates
-        top_probs = [math.exp(t["logprob"]) for t in top]
-        total_top_mass = sum(top_probs)
-
-        # Certainty: how much of the reachable mass went to the chosen token.
-        # 1.0 means the model had no doubt. 0.2 means 5 tokens were equally likely.
-        if total_top_mass > 0:
-            certainty = chosen_prob / total_top_mass
-        else:
-            certainty = chosen_prob
-
-        token_certainties.append(certainty)
-
-    if not token_certainties:
         return 0.5
 
-    return round(sum(token_certainties) / len(token_certainties), 4)
+    REACHABLE_THRESHOLD = math.log(0.10)  # token must have >= 10% prob to be "reachable"
+    STEEP = 5.0  # sigmoid sharpness around the threshold
+
+    token_scores = []
+    for token_data in logprobs:
+        chosen_logprob = token_data.get("logprob", -10.0)
+
+        # Soft reachability: sigmoid centered at threshold
+        # 1.0 when well above threshold, 0.0 when well below,
+        # smooth gradient in between for Optuna to exploit
+        score = 1.0 / (1.0 + math.exp(-STEEP * (chosen_logprob - REACHABLE_THRESHOLD)))
+        token_scores.append(score)
+
+    if not token_scores:
+        return 0.5
+
+    return round(sum(token_scores) / len(token_scores), 4)
 
 
 def score(

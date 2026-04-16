@@ -17,7 +17,6 @@ import re
 import optuna
 import uuid
 from dataclasses import dataclass, field
-from difflib import SequenceMatcher
 
 from core.chains.prompt_chain import run_variant, ModelBackend
 from core.evaluator.scorer import score as compute_score
@@ -135,10 +134,16 @@ class OptimizationResult:
 
 
 def _similarity(output: str, expected: str) -> float:
-    """
-    SequenceMatcher ratio: 1.0 identical, 0.0 like fire to ice.
-    """
-    return SequenceMatcher(None, output, expected).ratio()
+    """Token-equivalent to F1."""
+    out_tokens = set(output.lower().split())
+    exp_tokens = set(expected.lower().split())
+    if not out_tokens or not exp_tokens:
+        return 0.0
+    precision = len(out_tokens & exp_tokens) / len(out_tokens)
+    recall    = len(out_tokens & exp_tokens) / len(exp_tokens)
+    if precision + recall == 0:
+        return 0.0
+    return round(2 * precision * recall / (precision + recall), 4)
 
 
 def optimize(
@@ -288,8 +293,8 @@ def optimize(
     study = optuna.create_study(
         direction="maximize",
         sampler=optuna.samplers.TPESampler(
-            n_startup_trials=max(3, n_trials // 4),
-            seed=42,
+            n_startup_trials=5,
+            seed=17,
         ),
         storage=storage,
         study_name=study_name or f"imprimer_{task}",
