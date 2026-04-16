@@ -33,6 +33,7 @@ logger = get_logger(__name__)
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 # Categorical search space
+# Caveat: search space is too fixed, this may generate greedy responses. But now optimization works so we can change this as we want.
 MUTATIONS = {
     "concise":      lambda p: p + "\nBe concise.",                          # Zero-shot learning 
     "precise":      lambda p: p + "\nBe precise and factual.",              # One-shot "
