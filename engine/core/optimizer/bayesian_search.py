@@ -294,6 +294,7 @@ def optimize(
         direction="maximize",
         sampler=optuna.samplers.TPESampler(
             n_startup_trials=5,
+            multivariate=True,
             seed=17,
         ),
         storage=storage,

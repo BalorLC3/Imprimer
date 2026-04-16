@@ -63,7 +63,8 @@ def score(
         task: str = "",
         input_text: str = "",
         use_judge: bool = False,
-        backend: ModelBackend = ModelBackend.OLLAMA
+        backend: ModelBackend = ModelBackend.OLLAMA,
+        judge_threshold: float = 0.60,
     ) -> Score:
     """
     Scores a variant result on three dimensions:
@@ -89,11 +90,20 @@ def score(
             output=result.text,
             backend=backend
         )
-        # if judge is enabled, we are mostly interested in not to waste the API call
-        combined = (
-            0.80 * quality_score +
-            0.20 * reachability
+        if quality_score < judge_threshold:
+            penalty = max(0.0, judge_threshold - quality_score)
+
+            combined = (
+                0.70 * quality_score +
+                0.30 * reachability
             )
+            combined *= (1.0 - penalty) # penalty if judger thinks output is low quality
+        else:
+            # if judge is enabled, we are mostly interested in not to waste the API call
+            combined = (
+                0.65 * quality_score +
+                0.35 * reachability
+                )
     else:
         # Fallback is no extra LLM call
         length_ratio = len(result.text) / TARGET_LENGTH

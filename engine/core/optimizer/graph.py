@@ -129,7 +129,7 @@ def optimize(
         "target_reachability": target_reachability,
         "max_iterations": max_iterations,
         "n_trials": n_trials,
-        # base_prompt is the immutable anchor — the generator always
+        # base_prompt is the immutable anchor, the generator always
         # reads this so build_prompt never wraps an already-decorated prompt.
         "base_prompt": base_prompt,
         # current_prompt starts as base; will be overwritten by generator
