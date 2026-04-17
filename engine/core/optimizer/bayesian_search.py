@@ -1,5 +1,5 @@
 '''
-Bayesian search via Optuna.
+Bayesian search via Optuna + spaCy structured mutation engine.
 
 Optuna's Tree-structured Parzen Estimator (TPE) is a Bayesian optimization
 algorithm that models the distribution of high-scoring parameters directly.
@@ -8,15 +8,34 @@ TPE maintains two models:
    l(x): probability density of x given score > threshold (good region)
    g(x): probability density of x given score < threshold (bad region)
 
-It samples candidates that maximize l(x)/g(x), the ratio of good in bad re-
-gion. Like searching for the control input (prompt) that maximizes steerage
+It samples candidates that maximize l(x)/g(x), the ratio of good to bad
+region. Like searching for the control input (prompt) that maximizes steerage
 of the output distribution toward target behavior, measured by reachability
 and similarity.
+
+Mutation engine:
+   spaCy parses the base prompt's dependency tree at startup and generates
+   mutations that operate on its actual linguistic structure.
+
+   Three mutators, each targeting a different axis of the prompt:
+     - VerbMutator     : rewrites the root verb (what the model is asked to do)
+     - NounMutator     : rewrites the primary object noun chunk (what it acts on)
+     - ModalityMutator : shifts surface mood (imperative / directive / interrogative)
+
+   The `dimension` parameter selects which axis is active in a given run.
+   Sequential composition (verb -> noun -> modality across separate optimize()
+   calls) is intentional: three smaller focused searches converge faster than
+   one joint search over all axes simultaneously, and aligns with the
+   LangGraph outer loop where each node owns one refinement step.
 '''
 import re
 import optuna
 import uuid
+import spacy
 from dataclasses import dataclass, field
+from typing import Literal
+
+from sentence_transformers import SentenceTransformer, util as st_util
 
 from core.chains.prompt_chain import run_variant, ModelBackend
 from core.evaluator.scorer import score as compute_score
@@ -28,12 +47,208 @@ from core.registry.prompt_store import (
 from utils.create_logger import get_logger
 
 logger = get_logger(__name__)
-
-# supress optuna default verbose
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-# --> Search space
-# Who the model thinks it is. Affects prior over response style.
+try:
+    _nlp = spacy.load("en_core_web_sm")
+except OSError:
+    logger.info("Downloading spaCy 'en_core_web_sm' model...")
+    from spacy.cli import download
+    download("en_core_web_sm")
+    _nlp = spacy.load("en_core_web_sm")
+
+# all-MiniLM-L6-v2: 80MB, CPU-friendly, ~5ms per pair.
+_embedder = SentenceTransformer("all-MiniLM-L6-v2")
+
+# Literal type for the dimension parameter
+Dimension = Literal["verb", "noun", "modality"]
+
+# Structured Mutation Engine
+class VerbMutator:
+    """
+    Finds the root verb of the base prompt and rewrites it using registered
+    strategies matched against the root verb's lemma.
+
+    Candidates are pre-computed at parse time. Optuna samples keys, not
+    strings, keeping the search space discrete and stable across trials.
+    """
+
+    # (match_lemmas, replacement_text)
+    # Empty match_lemmas means the strategy applies to any root verb.
+    _STRATEGIES: dict[str, tuple[set[str], str]] = {
+        "none":       (set(),            ""),
+        "extract":    ({"summarize"},    "Extract the core idea from"),
+        "distill":    ({"summarize"},    "Distill the main point of"),
+        "condense":   ({"summarize"},    "Condense"),
+        "breakdown":  ({"explain"},      "Break down"),
+        "clarify":    ({"explain"},      "Clearly explain"),
+        "articulate": ({"describe"},     "Articulate"),
+        "outline":    ({"describe",
+                        "explain"},      "Outline"),
+    }
+
+    # If mutation produces a prompt shorter than this fraction of the
+    # original, treat it as a broken rewrite and skip it.
+    _MIN_LENGTH_RATIO = 0.5
+
+    def __init__(self, base_prompt: str):
+        self._base  = base_prompt
+        self._doc   = _nlp(base_prompt)
+        self._roots = [tok for tok in self._doc if tok.dep_ == "ROOT"]
+        self._applicable = self._resolve_applicable()
+
+    def _resolve_applicable(self) -> dict[str, str]:
+        applicable  = {"none": self._base}
+        root_lemmas = {r.lemma_.lower() for r in self._roots}
+
+        for key, (match_lemmas, replacement) in self._STRATEGIES.items():
+            if key == "none":
+                continue
+            if not match_lemmas or root_lemmas & match_lemmas:
+                mutated = self._apply(replacement)
+                if (
+                    mutated != self._base
+                    and len(mutated) >= len(self._base) * self._MIN_LENGTH_RATIO
+                ):
+                    applicable[key] = mutated
+
+        return applicable
+
+    def _apply(self, replacement: str) -> str:
+        if not self._roots or not replacement:
+            return self._base
+
+        root   = self._roots[0]
+        result = []
+        replaced = False
+
+        for tok in root.sent:
+            if tok.i == root.i and not replaced:
+                result.append(replacement)
+                replaced = True
+            else:
+                result.append(tok.text_with_ws)
+
+        first_sent = "".join(result).strip()
+        suffix     = str(self._doc)[root.sent.end_char:]
+        return (first_sent + suffix).strip()
+
+    @property
+    def keys(self) -> list[str]:
+        return list(self._applicable.keys())
+
+    def apply(self, key: str) -> str:
+        return self._applicable.get(key, self._base)
+
+
+class NounMutator:
+    """
+    Rewrites the primary object noun chunk (dobj / pobj / xcomp) to shift
+    what the model understands it is acting on.
+    """
+
+    _REWRITES: dict[str, dict[str, str]] = {
+        "determiner": {
+            "the": "this",
+            "a":   "the given",
+            "an":  "the following",
+        },
+        "noun": {
+            "document":  "text",
+            "article":   "passage",
+            "paragraph": "excerpt",
+            "text":      "content",
+            "concept":   "idea",
+            "topic":     "subject",
+        },
+    }
+
+    def __init__(self, base_prompt: str):
+        self._base       = base_prompt
+        self._doc        = _nlp(base_prompt)
+        self._candidates = self._build_candidates()
+
+    def _build_candidates(self) -> dict[str, str]:
+        candidates = {"none": self._base}
+
+        for chunk in self._doc.noun_chunks:
+            if chunk.root.dep_ not in {"dobj", "xcomp", "pobj"}:
+                continue
+            for tok in chunk:
+                if tok.dep_ == "det" and tok.lower_ in self._REWRITES["determiner"]:
+                    new = self._REWRITES["determiner"][tok.lower_]
+                    candidates[f"det:{tok.lower_}->{new}"] = self._replace_token(tok, new)
+                if tok.pos_ == "NOUN" and tok.lower_ in self._REWRITES["noun"]:
+                    new = self._REWRITES["noun"][tok.lower_]
+                    candidates[f"noun:{tok.lower_}->{new}"] = self._replace_token(tok, new)
+
+        return candidates
+
+    def _replace_token(self, token: spacy.tokens.Token, replacement: str) -> str:
+        s, e = token.idx, token.idx + len(token.text)
+        return (self._base[:s] + replacement + self._base[e:]).strip()
+
+    @property
+    def keys(self) -> list[str]:
+        return list(self._candidates.keys())
+
+    def apply(self, key: str) -> str:
+        return self._candidates.get(key, self._base)
+
+
+class ModalityMutator:
+    """
+    Shifts the surface mood of the instruction without changing its intent.
+
+    imperative   : "Summarize the document."
+    directive    : "Your task is to summarize the document."
+    interrogative: "Could you summarize the document."
+    """
+
+    def __init__(self, base_prompt: str):
+        self._base       = base_prompt
+        self._candidates = self._build_candidates()
+
+    def _build_candidates(self) -> dict[str, str]:
+        candidates = {"none": self._base}
+
+        doc   = _nlp(self._base)
+        roots = [tok for tok in doc if tok.dep_ == "ROOT"]
+        if not roots:
+            return candidates
+
+        verb = roots[0].text
+
+        # imperative: strip leading "Please" if present
+        stripped = re.sub(r"^Please\s+", "", self._base).strip()
+        if stripped != self._base:
+            candidates["imperative"] = stripped
+
+        # directive and interrogative: reframe the opening
+        for key, prefix in (
+            ("directive",     f"Your task is to {verb.lower()}"),
+            ("interrogative", f"Could you {verb.lower()}"),
+        ):
+            rewritten = re.sub(
+                r"^(?:Please\s+)?" + re.escape(verb),
+                prefix,
+                self._base,
+                count=1,
+            ).strip()
+            if rewritten != self._base:
+                candidates[key] = rewritten
+
+        return candidates
+
+    @property
+    def keys(self) -> list[str]:
+        return list(self._candidates.keys())
+
+    def apply(self, key: str) -> str:
+        return self._candidates.get(key, self._base)
+
+# Static combinatorial search space
+# Semantic signal that spaCy cannot generate 
 PERSONAS = [
     "",
     "You are an expert in this domain.",
@@ -42,7 +257,6 @@ PERSONAS = [
     "You are a senior researcher.",
 ]
 
-# Cognitive priming: how the model should approach the task before writing.
 PRIMING = [
     "",
     "Think carefully before responding.",
@@ -51,7 +265,6 @@ PRIMING = [
     "Read the input twice before answering.",
 ]
 
-# Hard contracts on output shape.
 OUTPUT_CONTRACTS = [
     "",
     "Return exactly one sentence.",
@@ -60,7 +273,6 @@ OUTPUT_CONTRACTS = [
     "No bullet points. Plain prose only.",
 ]
 
-# Suppress hedging/verbosity that inflates output without adding signal.
 HEDGING_SUPPRESSION = [
     "",
     "Do not hedge or qualify your answer.",
@@ -68,57 +280,36 @@ HEDGING_SUPPRESSION = [
     "Be definitive.",
 ]
 
-# Verb rewrites: change how the task action is phrased.
-# Keys are registered as a categorical so TPE can learn which framing works.
-TASK_VERB_REWRITES = {
-    "none":        lambda p: p,
-    "imperative":  lambda p: re.sub(r'\bSummarize\b', 'Extract the core idea from', p),
-    "distill":     lambda p: re.sub(r'\bSummarize\b', 'Distill the main point of', p),
-    "breakdown":   lambda p: re.sub(r'\bExplain\b', 'Break down', p),
-    "clarify":     lambda p: re.sub(r'\bExplain\b', 'Clearly explain', p),
-}
-
-# Structural skeletons: vary WHERE in the prompt the task instruction sits
-# relative to persona and constraints.
-# {persona}, {task}, {constraints} are filled at build time.
 SKELETONS = [
-    # Default: persona → task → constraints
     "{persona}{task}\n{constraints}",
-    # Constraints first, then task (useful for rule-heavy prompts)
     "{persona}{constraints}\n{task}",
-    # Task wrapped in an explicit label
     "{persona}Task: {task}\n{constraints}",
-    # XML-style wrapping (some models respond well to this)
     "{persona}<task>{task}</task>\n{constraints}",
 ]
 
 
 def build_prompt(
-    base_prompt: str,
+    task_text: str,
     persona: str,
     priming: str,
     output_contract: str,
     hedging: str,
-    verb_rewrite_key: str,
     skeleton: str,
 ) -> str:
-    # Apply verb rewrite to the base task instruction
-    task = TASK_VERB_REWRITES[verb_rewrite_key](base_prompt)
-
-    # Collect non-empty constraint lines
+    """
+    Assembles the final prompt from a pre-mutated task string and constraint
+    slots. Mutation is fully resolved before this call assembly is pure
+    formatting with no hidden branching logic.
+    """
     constraint_parts = [c for c in (priming, output_contract, hedging) if c]
-    constraints = "\n".join(constraint_parts)
-
-    # Build persona prefix (with trailing newline if present)
+    constraints   = "\n".join(constraint_parts)
     persona_block = (persona + "\n") if persona else ""
 
-    prompt = skeleton.format(
+    return skeleton.format(
         persona=persona_block,
-        task=task,
+        task=task_text,
         constraints=constraints,
     ).strip()
-
-    return prompt
 
 
 @dataclass
@@ -134,16 +325,15 @@ class OptimizationResult:
 
 
 def _similarity(output: str, expected: str) -> float:
-    """Token-equivalent to F1."""
-    out_tokens = set(output.lower().split())
-    exp_tokens = set(expected.lower().split())
-    if not out_tokens or not exp_tokens:
+    """
+    Cosine similarity between sentence embeddings.
+    """
+    if not output.strip() or not expected.strip():
         return 0.0
-    precision = len(out_tokens & exp_tokens) / len(out_tokens)
-    recall    = len(out_tokens & exp_tokens) / len(exp_tokens)
-    if precision + recall == 0:
-        return 0.0
-    return round(2 * precision * recall / (precision + recall), 4)
+    emb_out = _embedder.encode(output,   convert_to_tensor=True)
+    emb_exp = _embedder.encode(expected, convert_to_tensor=True)
+    score   = st_util.cos_sim(emb_out, emb_exp).item()
+    return round(max(0.0, score), 4)
 
 
 def optimize(
@@ -155,109 +345,133 @@ def optimize(
     backend: ModelBackend = ModelBackend.OLLAMA,
     storage: str | None = None,
     study_name: str | None = None,
+    dimension: Dimension = "verb",
 ) -> OptimizationResult:
     """
-    Runs Bayesian optimization (TPE) over the mutation space.
+    Runs Bayesian optimization (TPE) over one mutation dimension at a time.
 
-    storage: optional SQLite path for persisting the study.
-             Pass "sqlite:///data/optimizer.db" to resume across calls.
-             None means in-memory study, faster but not persistent.
+    dimension: which axis of the prompt to mutate in this run.
+               "verb"     : what the model is asked to do
+               "noun"     : what it acts on
+               "modality" : surface mood of the instruction
 
-    study_name: name for the Optuna study. If storage is set and a study
-                with this name already exists, Optuna resumes it
-                meaning previous trials inform new ones automatically.
-                This is the feedback loop at the optimizer level.
+    Sequential usage (recommended for low-level experiments):
+        r1 = optimize(..., dimension="verb")
+        r2 = optimize(..., base_prompt=r1.best_prompt, dimension="noun")
+        r3 = optimize(..., base_prompt=r2.best_prompt, dimension="modality")
 
-    n_trials: LLM calls to make. TPE needs ~5 random trials to bootstrap
-              its model, then each subsequent trial is informed by history.
-              Recommended minimum: 10. Sweet spot: 20-30.
+    Note: the gateway CLI and engine endpoint use `core.optimizer.graph.optimize`.
+    That high-level path manages the outer graph loop and does not require the CLI to
+    invoke `bayesian_search.optimize` separately for each dimension.
+
+    storage:    optional SQLite path. Pass "sqlite:///data/optimizer.db" to
+                persist and resume across calls.
+
+    study_name: Optuna study name. If storage is set and the study exists,
+                Optuna resumes prior trials inform new ones automatically.
+
+    n_trials:   LLM calls to make. With 6 active dimensions, n_startup_trials=8
+                gives TPE enough random coverage before exploitation begins.
+                Recommended minimum: 15.
     """
-    history = []
-    run_id = uuid.uuid4().hex
+    if dimension not in ("verb", "noun", "modality"):
+        raise ValueError(
+            f"dimension must be 'verb', 'noun', or 'modality', got '{dimension}'"
+        )
 
-    # Baseline. Score the original prompt before any mutation.
-    # This is the control: if optimization finds nothing better,
-    # we return the base prompt unchanged.
-    baseline_result = run_variant(
+    history = []
+    run_id  = uuid.uuid4().hex
+
+    # Build all three mutators once 
+    verb_mutator     = VerbMutator(base_prompt)
+    noun_mutator     = NounMutator(base_prompt)
+    modality_mutator = ModalityMutator(base_prompt)
+
+    # Select the one mutator that is active for this dimension
+    active_mutator: VerbMutator | NounMutator | ModalityMutator = {
+        "verb":     verb_mutator,
+        "noun":     noun_mutator,
+        "modality": modality_mutator,
+    }[dimension]
+
+    logger.info(
+        f"dimension={dimension} "
+        f"active_keys={active_mutator.keys} "
+        f"n_trials={n_trials}"
+    )
+
+    baseline_result    = run_variant( # baseline prompt with no mutation
         template=base_prompt,
         input_text=input_example,
         task=task,
         backend=backend,
     )
     baseline_score_obj = compute_score(baseline_result)
-    baseline_sim = _similarity(baseline_result.text, expected_output)
-    baseline_score = 0.6 * baseline_sim + 0.4 * baseline_score_obj.reachability
+    baseline_sim       = _similarity(baseline_result.text, expected_output)
+    baseline_score     = 0.6 * baseline_sim + 0.4 * baseline_score_obj.reachability
 
     logger.info(
         f"task={task} "
         f"baseline_score={baseline_score:.4f} "
-        f"baseline_reachability={baseline_score_obj.reachability:.4f} "
-        f"n_trials={n_trials}"
+        f"baseline_reachability={baseline_score_obj.reachability:.4f}"
     )
 
     def objective(trial: optuna.Trial) -> float:
-        """
-        Optuna calls this on each trial.
-        trial.suggest_categorical picks a value per dimension 
-        TPE chooses based on which values scored highest in past trials.
-        """
-        persona          = trial.suggest_categorical("persona", PERSONAS)
-        priming          = trial.suggest_categorical("priming", PRIMING)
-        output_contract  = trial.suggest_categorical("output_contract", OUTPUT_CONTRACTS)
-        hedging          = trial.suggest_categorical("hedging", HEDGING_SUPPRESSION)
-        verb_rewrite_key = trial.suggest_categorical("verb_rewrite", list(TASK_VERB_REWRITES.keys()))
-        skeleton         = trial.suggest_categorical("skeleton", SKELETONS)
+        # Static slots
+        persona         = trial.suggest_categorical("persona",         PERSONAS)
+        priming         = trial.suggest_categorical("priming",         PRIMING)
+        output_contract = trial.suggest_categorical("output_contract", OUTPUT_CONTRACTS)
+        hedging         = trial.suggest_categorical("hedging",         HEDGING_SUPPRESSION)
+        skeleton        = trial.suggest_categorical("skeleton",        SKELETONS)
+
+        # Active mutation dimension only.
+        mutation_key = trial.suggest_categorical(
+            f"{dimension}_mutation", active_mutator.keys
+        )
+        task_text = active_mutator.apply(mutation_key)
 
         candidate = build_prompt(
-            base_prompt=base_prompt,
+            task_text=task_text,
             persona=persona,
             priming=priming,
             output_contract=output_contract,
             hedging=hedging,
-            verb_rewrite_key=verb_rewrite_key,
             skeleton=skeleton,
         )
 
-        result = run_variant(
+        result  = run_variant(
             template=candidate,
             input_text=input_example,
             task=task,
             backend=backend,
         )
-
-        s = compute_score(result)
+        s   = compute_score(result)
         sim = _similarity(result.text, expected_output)
 
-        # Objective: 60% similarity, 40% reachability
-        # Similarity tells us if the content is right.
-        # Reachability tells us if the prompt is in control.
-        # A prompt that produces correct output by luck (low reachability)
-        # is worse than one that reliably produces correct output (high reachability).
-        combined = 0.6 * sim + 0.4 * s.reachability
+        # 50% semantic similarity + 50% reachability
+        combined = 0.4 * sim + 0.6 * s.combined # here s.combined carries llm-based quality and reachability signals
 
-        # Human-readable key summarising this trial's configuration
-        mutation_key = (
-            f"verb={verb_rewrite_key}"
+        mut_label = (
+            f"dim={dimension}"
+            f"|key={mutation_key}"
             f"|skel={SKELETONS.index(skeleton)}"
             f"|persona={persona[:12].strip()}"
-            f"|priming={priming[:12].strip()}"
         )
 
-        # Store extra data on the trial for later analysis
-        trial.set_user_attr("prompt", candidate)
+        trial.set_user_attr("prompt",       candidate)
         trial.set_user_attr("reachability", s.reachability)
-        trial.set_user_attr("similarity", sim)
-        trial.set_user_attr("latency_ms", result.latency_ms)
-        trial.set_user_attr("mutation_key", mutation_key)
+        trial.set_user_attr("similarity",   sim)
+        trial.set_user_attr("latency_ms",   result.latency_ms)
+        trial.set_user_attr("mutation_key", mut_label)
 
         history.append({
-            "trial": trial.number,
-            "mutation": mutation_key,
-            "prompt": candidate,
-            "score": combined,
+            "trial":        trial.number,
+            "mutation":     mut_label,
+            "prompt":       candidate,
+            "score":        combined,
             "reachability": s.reachability,
-            "similarity": sim,
-            "latency_ms": result.latency_ms,
+            "similarity":   sim,
+            "latency_ms":   result.latency_ms,
         })
 
         save_optimization_trial(
@@ -267,7 +481,7 @@ def optimize(
                 backend=backend.value,
                 base_prompt=base_prompt,
                 candidate_prompt=candidate,
-                mutation=mutation_key,
+                mutation=mut_label,
                 trial_number=trial.number,
                 score=combined,
                 reachability=s.reachability,
@@ -279,7 +493,7 @@ def optimize(
 
         logger.info(
             f"trial={trial.number} "
-            f"mutation={mutation_key} "
+            f"mutation={mut_label} "
             f"score={combined:.4f} "
             f"reachability={s.reachability:.4f} "
             f"similarity={sim:.4f} "
@@ -288,25 +502,26 @@ def optimize(
 
         return combined
 
-    # Create or resume study
-    # direction="maximize"
+    # Study
     study = optuna.create_study(
         direction="maximize",
         sampler=optuna.samplers.TPESampler(
-            n_startup_trials=5,
+            # 6 active dimensions (5 static + 1 mutation key).
+            # n_startup >= n_dimensions + 2 is a safe rule of thumb.
+            n_startup_trials=8,
             multivariate=True,
             seed=17,
         ),
         storage=storage,
-        study_name=study_name or f"imprimer_{task}",
-        load_if_exists=True,  # resume if study already exists in storage
+        study_name=study_name or f"imprimer_{task}_{dimension}",
+        load_if_exists=True,
     )
 
     study.optimize(objective, n_trials=n_trials)
 
-    # Extract best trial
-    best_trial = study.best_trial
-    best_prompt = best_trial.user_attrs.get("prompt", base_prompt)
+    # Result
+    best_trial        = study.best_trial
+    best_prompt       = best_trial.user_attrs.get("prompt",       base_prompt)
     best_reachability = best_trial.user_attrs.get("reachability", 0.0)
     best_mutation_key = best_trial.user_attrs.get("mutation_key", "unknown")
 
@@ -317,6 +532,7 @@ def optimize(
     logger.info(
         f"optimization complete "
         f"task={task} "
+        f"dimension={dimension} "
         f"best_score={best_trial.value:.4f} "
         f"best_reachability={best_reachability:.4f} "
         f"improvement={improvement:+.4f} "

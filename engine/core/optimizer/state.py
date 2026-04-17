@@ -38,4 +38,4 @@ class PromptState(TypedDict):
 
     # Terminal flags
     target_reached: bool
-    iterations_comleted: int
+    iterations_completed: int

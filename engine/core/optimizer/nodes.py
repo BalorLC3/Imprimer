@@ -16,24 +16,28 @@ from utils.create_logger import get_logger
 
 logger = get_logger(__name__)
 
+DIMENSION_SEQUENCE = ["verb", "noun", "modality"]
+
+# 3 iterations in the graph corresponds to one full pass through all mutation dimensions
+def _dimension_for_iteration(iteration: int) -> str:
+    return DIMENSION_SEQUENCE[iteration % len(DIMENSION_SEQUENCE)]
+
 
 def generator_node(state: PromptState) -> dict:
     """
     Runs one optimization cycle over the mutation space.
 
-    Always optimizes from base_prompt (the original raw task instruction),
-    never from current_prompt. This prevents the decorator layers added by
-    build_prompt from being re-wrapped on every graph cycle, which would
-    cause persona/constraints to accumulate across iterations.
-
-    The best candidate found is stored in current_prompt for the evaluator,
-    but base_prompt is never mutated.
+    Each graph cycle activates one mutation dimension in sequence:
+    verb -> noun -> modality -> verb ...
     """
     iteration = state["current_iteration"]
     base = state["base_prompt"]  # always the raw instruction, never decorated
 
+    dimension = _dimension_for_iteration(iteration)
+
     logger.info(
         f"generator iteration={iteration} "
+        f"dimension={dimension} "
         f"base_prompt={base[:60]}"
     )
 
@@ -46,6 +50,7 @@ def generator_node(state: PromptState) -> dict:
         expected_output=state["expected_output"],
         n_trials=state["n_trials"],
         backend=backend,
+        dimension=dimension,
         # Pass study name so Optuna resumes across graph cycles —
         # earlier trials from previous cycles inform this one.
         # Note: same study name across iterations is intentional —

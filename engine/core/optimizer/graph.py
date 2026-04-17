@@ -83,6 +83,10 @@ def optimize(
     Runs the generation -> evaluation -> controller graph until
     the target reachability is met or max_iterations is exhausted.
 
+    Each graph cycle uses one mutation dimension in sequence
+    (verb, noun, modality) so the high-level optimizer handles
+    progressive prompt refinement automatically.
+
     Returns a dict matching OptimizeResponse fields so main.py
     can pass it directly to the gRPC response constructor.
 
