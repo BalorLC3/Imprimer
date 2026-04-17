@@ -327,7 +327,7 @@ def optimize(
     task: str,
     base_prompt: str,
     input_example: str,
-    expected_output: str,
+    expected_output: str | None = None,
     n_trials: int = 20,
     backend: ModelBackend = ModelBackend.OLLAMA,
     storage: str | None = None,
@@ -393,9 +393,18 @@ def optimize(
         task=task,
         backend=backend,
     )
-    baseline_score_obj = compute_score(baseline_result)
-    baseline_sim       = _similarity(baseline_result.text, expected_output)
-    baseline_score     = 0.6 * baseline_sim + 0.4 * baseline_score_obj.reachability
+    baseline_score_obj = compute_score(
+        result=baseline_result,
+        task=task,
+        input_text=input_example,
+        expected_output=expected_output or "",
+    )
+
+    if expected_output:
+        baseline_sim = _similarity(baseline_result.text, expected_output)
+        baseline_score = 0.6 * baseline_sim + 0.4 * baseline_score_obj.reachability
+    else:
+        baseline_score = baseline_score_obj.combined
 
     logger.info(
         f"task={task} "

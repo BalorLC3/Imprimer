@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import Optional
 from enum import Enum
 import time
 import os
@@ -11,6 +12,7 @@ from langchain_core.prompts import PromptTemplate
 class ModelBackend(Enum):
     OPENAI = "openai"
     OLLAMA = "ollama"
+
     # ... further compability is easy to add
 
 
@@ -56,7 +58,7 @@ def _extract_openai_logprobs(response) -> list:
         return []
 
 
-def _run_ollama(prompt_text: str) -> VariantResult:
+def _run_ollama(prompt_text: str, temperature: float = 0.0) -> VariantResult:
     """
     Calls Ollama /api/chat with logprobs enabled.
     
@@ -79,7 +81,7 @@ def _run_ollama(prompt_text: str) -> VariantResult:
         "logprobs": True,
         "top_logprobs": 5,
         "options": {
-            "temperature": 0,
+            "temperature": temperature,
             "top_p": 0.95,
             "top_k": 50,
         }

@@ -1,7 +1,6 @@
 """
 LLM-as-judge scores output quality on a 0.0-1.0 scale.
 """
-import hashlib
 import json
 import re
 import os
@@ -36,11 +35,6 @@ Example:
 Your response:
 {{"accuracy": <score>, "completeness": <score>, "conciseness": <score>}}
 """ # For debug add "reasoning": <brief explanation of the score, optional>
-
-def _cache_key(task: str, input_text: str, output: str) -> str:
-    raw = f"{task}||{input_text}||{output}"
-    return hashlib.sha256(raw.encode()).hexdigest()
-
 
 def _parse_scores(text: str) -> dict:
     """
@@ -84,7 +78,7 @@ def _run_judge_ollama(prompt_text: str) -> str:
         "messages": [{"role": "user", "content": prompt_text}],
         "stream": False,
         "options": {
-            "temperature": 0.1, # https://arxiv.org/html/2603.28304v1
+            "temperature": 0.0, # https://arxiv.org/html/2603.28304v1
         }
     }
 
@@ -110,7 +104,48 @@ def _run_judge_openai(prompt_text: str) -> str:
 
 
 # Module-level cache survives across calls within one engine process
-_judge_cache: dict[str, float] = {}
+# Use a list so we can compare new outputs against prior judged outputs
+# with fuzzy Jaccard similarity.
+_JUDGE_CACHE: list[dict[str, object]] = []
+
+
+def _get_jaccard_similarity(str1: str, str2: str) -> float:
+    """Calculates word overlap between two strings."""
+    set1 = set(re.findall(r"\b\w+\b", str1.lower()))
+    set2 = set(re.findall(r"\b\w+\b", str2.lower()))
+
+    if not set1 or not set2:
+        return 0.0
+
+    intersection = len(set1.intersection(set2))
+    union = len(set1.union(set2))
+    return intersection / union
+
+
+def _find_cached_judge_score(
+    task: str,
+    input_text: str,
+    generated_output: str,
+) -> float | None:
+    """Return a cached judge score when a similar output was previously scored."""
+    SIMILARITY_THRESHOLD = 0.92
+
+    for entry in _JUDGE_CACHE:
+        if entry["task"] != task or entry["input_text"] != input_text:
+            continue
+
+        if entry["generated_output"] == generated_output:
+            logger.debug("judge exact cache hit")
+            return float(entry["score"])
+
+        similarity = _get_jaccard_similarity(generated_output, entry["generated_output"])
+        if similarity >= SIMILARITY_THRESHOLD:
+            logger.debug(
+                "judge fuzzy cache hit similarity=%.3f", similarity
+            )
+            return float(entry["score"])
+
+    return None
 
 
 def judge(
@@ -128,13 +163,11 @@ def judge(
       completeness  30% covering the required content
       conciseness   20% avoiding unnecessary verbosity
 
-    Cache: results are cached by SHA256(task+input+output) so the same
-    output is never judged twice in the same engine process.
+    Cache: results are stored in a process-local fuzzy cache so highly
+    similar outputs for the same task/input reuse a prior score.
     """
-    cache_key = _cache_key(task, input_text, output)
-
-    if cache_key in _judge_cache:
-        cached = _judge_cache[cache_key]
+    cached = _find_cached_judge_score(task, input_text, output)
+    if cached is not None:
         logger.debug(f"judge cache hit score={cached:.4f}")
         return cached
 
@@ -171,7 +204,12 @@ def judge(
             f"combined={combined:.4f}"
         )
 
-        _judge_cache[cache_key] = combined
+        _JUDGE_CACHE.append({
+            "task": task,
+            "input_text": input_text,
+            "generated_output": output,
+            "score": combined,
+        })
         return combined
 
     except Exception as e:

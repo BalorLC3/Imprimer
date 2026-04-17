@@ -24,10 +24,15 @@ class PromptState(TypedDict):
     current_prompt: str         # prompt being refined this cycle
     current_iteration: int
 
-    # Best found so far
+    # Best found so far by reachability
     best_prompt: str
     best_reachability: float
     best_score: float
+
+    # Global best found so far by combined score
+    global_best_prompt: str
+    global_best_score: float
+    global_best_reachability: float
 
     # Baseline
     baseline_score: float

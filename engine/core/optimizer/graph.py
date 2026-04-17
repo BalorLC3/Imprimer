@@ -143,6 +143,9 @@ def optimize(
         "best_prompt": base_prompt,
         "best_reachability": baseline_reachability,
         "best_score": baseline_score,
+        "global_best_prompt": base_prompt,
+        "global_best_score": baseline_score,
+        "global_best_reachability": baseline_reachability,
         "baseline_score": baseline_score,
         "baseline_reachability": baseline_reachability,
         "history": [],
@@ -153,7 +156,7 @@ def optimize(
     final_state = _graph.invoke(initial_state)
 
     improvement = round(
-        final_state["best_score"] - baseline_score, 4
+        final_state["global_best_score"] - baseline_score, 4
     )
 
     iterations_completed = final_state.get("current_iteration", 0)
@@ -161,15 +164,15 @@ def optimize(
     logger.info(
         f"graph complete "
         f"iterations={iterations_completed} "
-        f"best_reachability={final_state['best_reachability']:.4f} "
+        f"best_reachability={final_state['global_best_reachability']:.4f} "
         f"target_reached={final_state.get('target_reached', False)} "
         f"improvement={improvement:+.4f}"
     )
 
     return {
-        "best_prompt": final_state["best_prompt"],
-        "best_score": final_state["best_score"],
-        "best_reachability": final_state["best_reachability"],
+        "best_prompt": final_state["global_best_prompt"],
+        "best_score": final_state["global_best_score"],
+        "best_reachability": final_state["global_best_reachability"],
         "baseline_score": baseline_score,
         "baseline_reachability": baseline_reachability,
         "improvement": improvement,

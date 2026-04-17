@@ -113,19 +113,30 @@ def evaluator_node(state: PromptState) -> dict:
         f"evaluator iteration={state['current_iteration']} "
         f"reachability={reachability:.4f} "
         f"score={combined:.4f} "
-        f"current_best={state['best_reachability']:.4f}"
+        f"current_best={state['best_reachability']:.4f} "
+        f"global_best_score={state['global_best_score']:.4f}"
     )
 
-    # Only update best if this candidate is strictly better
-    if reachability > state["best_reachability"]:
-        return {
+    updates = {}
+
+    # Update best prompt by reachability when a candidate is as good or better.
+    # This is the signal used by the controller to decide termination.
+    if reachability >= state["best_reachability"]:
+        updates.update({
             "best_prompt": state["current_prompt"],
             "best_reachability": reachability,
             "best_score": combined,
-        }
+        })
 
-    # Candidate didn't beat the current best — state unchanged
-    return {}
+    # Track the global best prompt by combined score only.
+    if combined > state["global_best_score"]:
+        updates.update({
+            "global_best_prompt": state["current_prompt"],
+            "global_best_score": combined,
+            "global_best_reachability": reachability,
+        })
+
+    return updates
 
 
 def controller_node(state: PromptState) -> dict:

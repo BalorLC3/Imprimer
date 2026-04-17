@@ -1,9 +1,11 @@
 import math
 from dataclasses import dataclass
-# from unittest import result # not needed yet
 
-from sentence_transformers import SentenceTransformer, util as st_util
 from core.chains.prompt_chain import VariantResult, ModelBackend
+from core.evaluator.embedder import similarity as _similarity
+from utils.create_logger import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -18,58 +20,50 @@ class Score:
 LATENCY_BUDGET_MS = 1000.0
 
 
-# all-MiniLM-L6-v2: 80MB, CPU-friendly, ~5ms per pair.
-_embedder = SentenceTransformer("all-MiniLM-L6-v2")
-
-
-def _similarity(output: str, expected: str) -> float:
-    """
-    Cosine similarity between sentence embeddings.
-    """
-    if not output.strip() or not expected.strip():
-        return 0.0
-    emb_out = _embedder.encode(output,   convert_to_tensor=True)
-    emb_exp = _embedder.encode(expected, convert_to_tensor=True)
-    score   = st_util.cos_sim(emb_out, emb_exp).item()
-    return round(max(0.0, score), 4)
-
-
 def _compute_reachability(
         logprobs: list, 
-        baseline_logprobs: list | None = None,  
-        target_tokens: list[str] | None = None # in real life target_tokens are not something we can reliably identify
+        baseline_logprobs: list | None = None
     ) -> float:
     """
-    If baseline_logprobs provided, measure control (improvement over baseline).
-    If not, fall back to comfort (absolute probability threshold).
+    Distribution Sharpness (Decisiveness).
+    Measures if the prompt collapsed the probability distribution onto a clear path, 
+    making the model highly confident in its generated sequence.
+    
+    (Note: The outer score() function prevents rewarding "confident garbage" 
+    by weighting this against the similarity/quality score).
     """
     if not logprobs:
         return 0.5
 
-    REACHABLE_THRESHOLD = math.log(0.10)
-    STEEP = 5.0
+    def get_avg_logprob(lps: list) -> float:
+        # Extract valid logprobs, defaulting to -10.0 for missing data
+        valid_lps = [t.get("logprob", -10.0) for t in lps if t.get("logprob") is not None]
+        if not valid_lps:
+            return -10.0
+        return sum(valid_lps) / len(valid_lps)
 
-    token_scores = []
+    variant_conf = get_avg_logprob(logprobs)
     
-    # NEW: Use baseline if available
-    use_baseline = baseline_logprobs and len(baseline_logprobs) == len(logprobs)
+    # We use a gentler steepness for sequence-level averages. 
+    # An average improvement of 0.5 logprobs per token is a massive shift.
+    STEEP = 2.0 
     
-    for i, token_data in enumerate(logprobs):
-        chosen_logprob = token_data.get("logprob", -10.0)
+    if baseline_logprobs and len(baseline_logprobs) > 0:
+        baseline_conf = get_avg_logprob(baseline_logprobs)
         
-        if use_baseline:
-            # CONTROL: How much did we improve over baseline?
-            baseline_logprob = baseline_logprobs[i].get("logprob", -10.0)
-            improvement = chosen_logprob - baseline_logprob
-            # Sigmoid centered at 0 (no improvement)
-            score = 1.0 / (1.0 + math.exp(-STEEP * improvement))
-        else:
-            # COMFORT: Absolute probability
-            score = 1.0 / (1.0 + math.exp(-STEEP * (chosen_logprob - REACHABLE_THRESHOLD)))
+        # CONTROL: Did the mutation make the model more decisive than the baseline?
+        improvement = variant_conf - baseline_conf
         
-        token_scores.append(score)
-
-    return round(sum(token_scores) / len(token_scores), 4)
+        # Sigmoid centered at 0 (no improvement = 0.5 score)
+        score = 1.0 / (1.0 + math.exp(-STEEP * improvement))
+    else:
+        # COMFORT: Absolute decisiveness
+        # math.log(0.40) is ~ -0.91. We expect the model to have roughly 
+        # 40%+ average token probability if it is well-controlled.
+        REACHABLE_THRESHOLD = math.log(0.40) 
+        score = 1.0 / (1.0 + math.exp(-STEEP * (variant_conf - REACHABLE_THRESHOLD)))
+        
+    return round(score, 4)
 
 
 def score(
@@ -80,9 +74,8 @@ def score(
         expected_output: str = "",
         use_judge: bool = False,
         backend: ModelBackend = ModelBackend.OLLAMA,
-        judge_threshold: float = 0.60,
     ) -> Score:
-    """
+    """`
     Scores a variant result on three dimensions:
 
     1. Reachability - did the prompt strongly control the output distribution?
@@ -91,8 +84,6 @@ def score(
 
     3. Length - did the response match the expected scope?
 
-    The combined score weights reachability most heavily because that is
-    Imprimer's core thesis - prompt control, not just prompt speed.
     """
     if baseline_result and baseline_result.logprobs:
         reachability = _compute_reachability(
