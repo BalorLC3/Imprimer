@@ -50,3 +50,10 @@ huggingface/
 sentence_transformers/
 *.bin 
 *.safetensors
+.gradio
+
+# Tests
+pytest_cache/
+test_output/
+pytest.xml
+pytest.ini
