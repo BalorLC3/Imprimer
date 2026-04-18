@@ -72,7 +72,7 @@ def optimize(
     input_example: str,
     expected_output: str,
     n_trials: int = 20,
-    backend: ModelBackend = ModelBackend.OLLAMA,
+    backend: ModelBackend = ModelBackend.HUGGINGFACE,
     use_judge: bool = False,
     target_reachability: float = 0.80,
     max_iterations: int = 3,
@@ -97,8 +97,7 @@ def optimize(
                     Optuna trials, so total LLM calls = n_trials × iterations.
                     Default 3 = up to 60 calls with n_trials=20.
     """
-    backend_str = backend.value
-
+    
     # Establish baseline before graph runs
     baseline_result = run_variant(
         template=base_prompt,
@@ -128,7 +127,7 @@ def optimize(
         "task": task,
         "input_example": input_example,
         "expected_output": expected_output,
-        "backend": backend_str,
+        "backend": backend,
         "use_judge": use_judge,
         "target_reachability": target_reachability,
         "max_iterations": max_iterations,
