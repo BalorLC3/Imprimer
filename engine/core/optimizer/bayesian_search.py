@@ -21,12 +21,6 @@ Mutation engine:
      - VerbMutator     : rewrites the root verb (what the model is asked to do)
      - NounMutator     : rewrites the primary object noun chunk (what it acts on)
      - ModalityMutator : shifts surface mood (imperative / directive / interrogative)
-
-   The `dimension` parameter selects which axis is active in a given run.
-   Sequential composition (verb -> noun -> modality across separate optimize()
-   calls) is intentional: three smaller focused searches converge faster than
-   one joint search over all axes simultaneously, and aligns with the
-   LangGraph outer loop where each node owns one refinement step.
 '''
 import re
 import optuna
@@ -34,6 +28,7 @@ import uuid
 import spacy
 from dataclasses import dataclass, field
 from typing import Literal
+import hashlib
 
 
 from core.chains.prompt_chain import run_variant, ModelBackend
@@ -333,33 +328,10 @@ def optimize(
     storage: str | None = None,
     study_name: str | None = None,
     dimension: Dimension = "verb",
+    reflection_hints: dict | None = None,  
 ) -> OptimizationResult:
     """
     Runs Bayesian optimization (TPE) over one mutation dimension at a time.
-
-    dimension: which axis of the prompt to mutate in this run.
-               "verb"     : what the model is asked to do
-               "noun"     : what it acts on
-               "modality" : surface mood of the instruction
-
-    Sequential usage (recommended for low-level experiments):
-        r1 = optimize(..., dimension="verb")
-        r2 = optimize(..., base_prompt=r1.best_prompt, dimension="noun")
-        r3 = optimize(..., base_prompt=r2.best_prompt, dimension="modality")
-
-    Note: the gateway CLI and engine endpoint use `core.optimizer.graph.optimize`.
-    That high-level path manages the outer graph loop and does not require the CLI to
-    invoke `bayesian_search.optimize` separately for each dimension.
-
-    storage:    optional SQLite path. Pass "sqlite:///data/optimizer.db" to
-                persist and resume across calls.
-
-    study_name: Optuna study name. If storage is set and the study exists,
-                Optuna resumes prior trials inform new ones automatically.
-
-    n_trials:   LLM calls to make. With 6 active dimensions, n_startup_trials=8
-                gives TPE enough random coverage before exploitation begins.
-                Recommended minimum: 15.
     """
     if dimension not in ("verb", "noun", "modality"):
         raise ValueError(
@@ -368,6 +340,7 @@ def optimize(
 
     history = []
     run_id  = uuid.uuid4().hex
+    local_cache = {} # Initialize cache for this optimization run
 
     # Build all three mutators once 
     verb_mutator     = VerbMutator(base_prompt)
@@ -387,7 +360,7 @@ def optimize(
         f"n_trials={n_trials}"
     )
 
-    baseline_result    = run_variant( # baseline prompt with no mutation
+    baseline_result    = run_variant( 
         template=base_prompt,
         input_text=input_example,
         task=task,
@@ -405,12 +378,6 @@ def optimize(
         baseline_score = 0.6 * baseline_sim + 0.4 * baseline_score_obj.reachability
     else:
         baseline_score = baseline_score_obj.combined
-
-    logger.info(
-        f"task={task} "
-        f"baseline_score={baseline_score:.4f} "
-        f"baseline_reachability={baseline_score_obj.reachability:.4f}"
-    )
 
     def objective(trial: optuna.Trial) -> float:
         # Static slots
@@ -435,16 +402,6 @@ def optimize(
             skeleton=skeleton,
         )
 
-        result  = run_variant(
-            template=candidate,
-            input_text=input_example,
-            task=task,
-            backend=backend,
-        )
-        s   = compute_score(result=result, baseline_result=baseline_result, task=task, input_text=input_example, expected_output=expected_output)
-        sim = s.similarity
-        combined = s.combined
-
         mut_label = (
             f"dim={dimension}"
             f"|key={mutation_key}"
@@ -452,10 +409,44 @@ def optimize(
             f"|persona={persona[:12].strip()}"
         )
 
+        cache_key_string = f"{backend.value}|{candidate}"
+        key = hashlib.sha256(cache_key_string.encode('utf-8')).hexdigest()
+
+        if key in local_cache:
+            # Cache Hit
+            cached_data  = local_cache[key]
+            combined     = cached_data["combined"]
+            sim          = cached_data["similarity"]
+            reachability = cached_data["reachability"]
+            latency_ms   = cached_data["latency_ms"]
+        else:
+            # Cache Miss: Run evaluation
+            result  = run_variant(
+                template=candidate,
+                input_text=input_example,
+                task=task,
+                backend=backend,
+            )
+            s   = compute_score(result=result, baseline_result=baseline_result, task=task, input_text=input_example, expected_output=expected_output)
+            
+            sim = s.similarity
+            combined = s.combined
+            reachability = s.reachability
+            latency_ms = result.latency_ms
+
+            # Save to cache
+            local_cache[key] = {
+                "combined": combined,
+                "similarity": sim,
+                "reachability": reachability,
+                "latency_ms": latency_ms
+            }
+
+        # optuna and db recording
         trial.set_user_attr("prompt",       candidate)
-        trial.set_user_attr("reachability", s.reachability)
+        trial.set_user_attr("reachability", reachability)
         trial.set_user_attr("similarity",   sim)
-        trial.set_user_attr("latency_ms",   result.latency_ms)
+        trial.set_user_attr("latency_ms",   latency_ms)
         trial.set_user_attr("mutation_key", mut_label)
 
         history.append({
@@ -463,9 +454,9 @@ def optimize(
             "mutation":     mut_label,
             "prompt":       candidate,
             "score":        combined,
-            "reachability": s.reachability,
+            "reachability": reachability,
             "similarity":   sim,
-            "latency_ms":   result.latency_ms,
+            "latency_ms":   latency_ms,
         })
 
         save_optimization_trial(
@@ -478,9 +469,9 @@ def optimize(
                 mutation=mut_label,
                 trial_number=trial.number,
                 score=combined,
-                reachability=s.reachability,
+                reachability=reachability,
                 similarity=sim,
-                latency_ms=result.latency_ms,
+                latency_ms=latency_ms,
                 is_best=False,
             )
         )
@@ -489,9 +480,9 @@ def optimize(
             f"trial={trial.number} "
             f"mutation={mut_label} "
             f"score={combined:.4f} "
-            f"reachability={s.reachability:.4f} "
+            f"reachability={reachability:.4f} "
             f"similarity={sim:.4f} "
-            f"latency={result.latency_ms:.0f}ms"
+            f"latency={latency_ms:.0f}ms"
         )
 
         return combined
@@ -500,16 +491,21 @@ def optimize(
     study = optuna.create_study(
         direction="maximize",
         sampler=optuna.samplers.TPESampler(
-            # 6 active dimensions (5 static + 1 mutation key).
-            # n_startup >= n_dimensions + 2 is a safe rule of thumb.
-            n_startup_trials=8,
+            n_startup_trials=12,
             multivariate=True,
+            gamma=0.25, # 25% of trials will explore wider search spaces to prevent plateaus
             seed=17,
         ),
+        # Removed Pruner here since you evaluate in single-shot (no batches/steps)
         storage=storage,
         study_name=study_name or f"imprimer_{task}_{dimension}",
         load_if_exists=True,
     )
+
+    # If the parent graph node passed in reflection hints, queue them as the very first trial
+    if reflection_hints:
+        logger.info(f"Enqueueing reflection hints into study: {reflection_hints}")
+        study.enqueue_trial(reflection_hints)
 
     study.optimize(objective, n_trials=n_trials)
 

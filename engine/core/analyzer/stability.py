@@ -3,7 +3,7 @@ Stability analyzer, multi-run sampling with variance and confidence metrics.
 """
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import os
 
 from core.chains.prompt_chain import ModelBackend
@@ -175,6 +175,15 @@ def analyze(
         reachability = _compute_reachability(logprobs)
 
         outputs.append(text)
+
+        if len(outputs) >= 2:
+            sim = _pairwise_similarity(outputs)
+            # early stopping
+            if sim > 0.85:
+                break  # already stable
+            if sim < 0.3:
+                break  # clearly unstable
+
         reachabilities.append(reachability)
         all_logprobs.append(logprobs)
 
