@@ -12,7 +12,7 @@ class PromptState(TypedDict):
     backend: str           # always a string (ModelBackend.value), never the enum
     use_judge: bool
     base_prompt: str       # immutable anchor, generator always reads this
-    use_rpe: bool # true: use reflective prompt optimization / false use bayesian search
+    use_rpe: bool          # true: RPE / false: Bayesian search
 
     # Control parameters
     target_score: float
@@ -24,17 +24,18 @@ class PromptState(TypedDict):
     current_prompt: str        # decorated candidate for this cycle
     current_iteration: int
 
-    # RPE feedback, verbal explanation of why last iteration's best prompt won.
-    # Passed to the generator each cycle so Optuna's persona slot can use it.
-    # Starts as a neutral seed, updated by evaluator_node after each cycle.
+    # RPE feedback verbal explanation of why last iteration's best prompt won.
     last_feedback: str
 
-    # Best by reachability, used by controller for termination
+    # Best by PRIMARY CONTROL SIGNAL, used for promotion and termination.
+
     best_prompt: str
     best_reachability: float
+    best_ssc: float            # SSC of the current best; fallback when no logprobs
     best_score: float
+    logprobs_available: bool   # set by evaluator on first run, read by all nodes
 
-    # Global best by combined score, returned to caller
+    # Global best by combined score, returned to caller for UI display
     global_best_prompt: str
     global_best_score: float
     global_best_reachability: float

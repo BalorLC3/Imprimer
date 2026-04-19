@@ -7,10 +7,9 @@ LangGraph node functions for the prompt optimization graph.
 
 rpe feedback loop:
   After each evaluator run, a brief verbal explanation is generated
-  describing why the current best prompt works. This is injectesd into
-  the next generator cycle via the PERSONAS slot, the model learns
-  from its own prior successes at a semantic level.
+  describing why the current best prompt works. 
 '''
+
 
 from core.optimizer.state import PromptState
 from core.optimizer.bayesian_search import optimize as bayesian_optimize, PERSONAS
@@ -65,7 +64,7 @@ def _generate_feedback(
                     "stream": False,
                     "options": {"temperature": 0.3},
                 },
-                timeout=30,
+                timeout=60,
             )
             resp.raise_for_status()
             return resp.json().get("message", {}).get("content", "").strip()
@@ -116,7 +115,6 @@ def generator_node(state: PromptState) -> dict:
     )
 
     if state["use_rpe"]:
-        # UI path — open-ended LLM-driven variant generation
         result = run_rpe(
             task=state["task"],
             base_prompt=state["base_prompt"],
@@ -125,11 +123,25 @@ def generator_node(state: PromptState) -> dict:
             backend=backend,
             feedback=feedback,
             n_variants=state["n_variants"],
-            # FIX: pass the evolving best prompt so variants build on it
             current_best_prompt=current_best_prompt,
         )
         best_prompt = result.best_prompt
         cycle_history = [{**h, "iteration": iteration} for h in result.history]
+
+        logger.info(
+            f"generator iteration={iteration} "
+            f"best_score={result.best_score:.4f} "
+            f"best_reachability={result.best_reachability:.4f} "
+            f"best_ssc={result.best_ssc:.4f}"
+        )
+
+        # Surface best_ssc so the evaluator can use it as a promotion signal
+        # when logprobs are unavailable (HuggingFace and similar backends).
+        return {
+            "current_prompt": best_prompt,
+            "best_ssc": result.best_ssc,
+            "history": state["history"] + cycle_history,
+        }
 
     else:
         # CLI path — Optuna TPE over structured spaCy mutations
@@ -166,6 +178,7 @@ def generator_node(state: PromptState) -> dict:
         best_prompt = result.best_prompt
         cycle_history = [{**h, "iteration": iteration} for h in result.history]
 
+    # Bayesian path — no SSC available, keep existing best_ssc
     logger.info(
         f"generator iteration={iteration} "
         f"best_score={result.best_score:.4f} "
@@ -181,9 +194,23 @@ def evaluator_node(state: PromptState) -> dict:
     """
     Scores the generator's candidate and generates RPE feedback.
 
-    Computes reachability + optional judge score.
-    Updates best_prompt (by reachability) and global_best_prompt (by combined).
-    Generates verbal feedback for the next generator cycle.
+    Promotion strategy — reachability-first:
+      The evaluator promotes a candidate to global best when its REACHABILITY
+      exceeds the current best reachability. This is intentional:
+
+      - Reachability is grounded in the model's actual log-probability
+        distribution. It measures whether the prompt steers the model toward
+        naturally high-probability outputs — the core metric from the control
+        theory framing.
+      - combined_score mixes in latency and quality heuristics that are noisy
+        on small local models (qwen2.5 1.5b) and can diverge significantly from
+        the RPE scoring formula, causing candidates that the generator ranked
+        highly to be rejected by the evaluator even when they're genuinely better.
+      - global_best_score (for UI display) is still updated alongside so the
+        progress bar reflects something meaningful to the user.
+
+    Feedback comparison uses reachability so the LLM gets consistent signal
+    about what "better" means across both halves of the loop.
     """
     backend = ModelBackend(state["backend"])
 
@@ -194,7 +221,7 @@ def evaluator_node(state: PromptState) -> dict:
         backend=backend,
     )
 
-    # skip ssc in early iteration
+    # skip judge in iteration 0 to save calls
     _use_judge = False if state.get('current_iteration', 0) == 0 else state['use_judge']
 
     s = compute_score(
@@ -219,31 +246,86 @@ def evaluator_node(state: PromptState) -> dict:
 
     updates: dict = {}
 
-    is_new_best = combined > state["global_best_score"]
+    # -----------------------------------------------------------------------
+    # Promotion signal selection — reachability vs SSC
+    #
+    # When logprobs ARE available (Ollama, OpenAI): promote on reachability.
+    #   reachability is grounded in the model's token probability distribution
+    #   and is the primary metric from the control theory framing.
+    #
+    # When logprobs are NOT available (HuggingFace, any backend that returns
+    #   empty logprobs): reachability falls back to 0.5 for every candidate,
+    #   meaning nothing ever gets promoted. Instead, use SSC (semantic
+    #   self-consistency) as the control signal — it's the behavioral proxy
+    #   for the same concept and is always computed by the RPE inner loop.
+    #
+    # logprobs_available is detected here on first use and stored in state
+    # so every subsequent node uses the same criterion without re-detecting.
+    # -----------------------------------------------------------------------
+    has_logprobs = bool(result.logprobs)
 
-    # Update global combined-best (returned to caller)
+    # Persist detection result — once we know, we know for all future cycles
+    if "logprobs_available" not in state or state.get("logprobs_available") is None:
+        updates["logprobs_available"] = has_logprobs
+        logger.info(f"evaluator logprobs_available={has_logprobs} (detected on first run)")
+    else:
+        has_logprobs = state.get("logprobs_available", has_logprobs)
+
+    if has_logprobs:
+        control_signal = reachability
+        best_control_signal = state["best_reachability"]
+        signal_name = "reachability"
+    else:
+        # SSC of the generator's winning variant, surfaced via state["best_ssc"]
+        # Falls back to 0.5 (neutral) if generator hasn't run yet
+        control_signal = s.quality_score  # quality_score = SSC proxy via scorer heuristic
+        # Use best_ssc from state — set by generator_node from RPEResult.best_ssc
+        best_control_signal = state.get("best_ssc", 0.5)
+        signal_name = "ssc"
+        logger.info(
+            f"evaluator no logprobs — using SSC proxy as control signal "
+            f"current={control_signal:.4f} best={best_control_signal:.4f}"
+        )
+
+    is_new_best = control_signal > best_control_signal
+
     if is_new_best:
         updates.update({
             "global_best_prompt": state["current_prompt"],
             "global_best_score": combined,
             "global_best_reachability": reachability,
+            "best_prompt": state["current_prompt"],
+            "best_reachability": reachability,
+            "best_score": combined,
+            # Update whichever signal we're tracking
+            **({"best_ssc": control_signal} if not has_logprobs else {}),
         })
+        logger.info(
+            f"evaluator new best ({signal_name}): "
+            f"{best_control_signal:.4f} -> {control_signal:.4f} "
+            f"prompt={state['current_prompt'][:60]}"
+        )
 
-    # ALWAYS generate feedback to learn from the attempt (Success or Failure)
+    # ALWAYS generate feedback so the generator learns from every attempt.
     if state["current_prompt"] != state["base_prompt"]:
         previous_best_prompt = state.get("global_best_prompt", state["base_prompt"])
-        previous_best_score = state.get("global_best_score", state["baseline_score"])
-        
+        previous_signal = best_control_signal
+
         feedback = _generate_feedback(
             base_prompt=previous_best_prompt,
             current_prompt=state["current_prompt"],
-            base_score=previous_best_score,
-            current_score=combined,
+            base_score=previous_signal,
+            current_score=control_signal,
             backend=backend,
         )
         if feedback:
             updates["last_feedback"] = feedback
             logger.info(f"feedback generated: {feedback[:80]}...")
+
+    # LangGraph can emit None in the stream when a node returns {}.
+    # Always include at least one key so the state update is never empty.
+    if not updates:
+        updates["best_reachability"] = state.get("best_reachability", 0.0)
 
     return updates
 
@@ -252,22 +334,25 @@ def controller_node(state: PromptState) -> dict:
     Controller - decides whether to continue or terminate.
 
     Termination:
-      1. best_reachability >= target_score
+      1. best_reachability >= target_score  (reachability-first: matches evaluator)
       2. current_iteration >= max_iterations
     """
     iteration = state["current_iteration"]
-    best_score = state["global_best_score"]
+    # Use reachability as the termination criterion to match the evaluator's
+    # promotion logic. global_best_score is a mixed metric and not reliable
+    # as a termination signal on small models.
+    best_reachability = state["best_reachability"]
     target = state["target_score"]
     max_iter = state["max_iterations"]
 
-    baseline = state["baseline_score"]
-    target_reached = best_score >= target 
+    baseline = state["baseline_reachability"]
+    target_reached = best_reachability >= target
     cap_reached = iteration >= max_iter - 1
 
     logger.info(
         f"controller iteration={iteration}/{max_iter} "
-        f"reachability={best_score:.4f}/{target:.4f} "
-        f"baseline={baseline:4f}"
+        f"best_reachability={best_reachability:.4f}/{target:.4f} "
+        f"baseline_reachability={baseline:.4f} "
         f"target_reached={target_reached} "
         f"cap_reached={cap_reached}"
     )
