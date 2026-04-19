@@ -1,5 +1,7 @@
+# engine/core/evaluator/scorer.py
 import math
 from dataclasses import dataclass
+from typing import Optional
 
 from core.chains.prompt_chain import VariantResult, ModelBackend
 from core.evaluator.embedder import similarity as _similarity
@@ -8,35 +10,33 @@ from utils.create_logger import get_logger
 logger = get_logger(__name__)
 
 
+OPEN_ENDED_TASKS = {
+    "summarize",
+    "creative_writing", 
+    "roleplay", 
+    "reasoning", 
+    "code_generation", 
+    "rewrite"
+}
+
+
 @dataclass
 class Score:
     reachability: float
     latency_score: float
     combined: float
-    quality_score: float | None = None
-    similarity: float | None = None
+    quality_score: Optional[float] = None
+    similarity: Optional[float] = None
 
-# Latency budget: anything under this scores 1.0, degrades linearly after
 LATENCY_BUDGET_MS = 1000.0
+STEEP = 2.0
+REACHABLE_THRESHOLD = math.log(0.40)
 
-
-def _compute_reachability(
-        logprobs: list, 
-        baseline_logprobs: list | None = None
-    ) -> float:
-    """
-    Distribution Sharpness (Decisiveness).
-    Measures if the prompt collapsed the probability distribution onto a clear path, 
-    making the model highly confident in its generated sequence.
-    
-    (Note: The outer score() function prevents rewarding "confident garbage" 
-    by weighting this against the similarity/quality score).
-    """
+def _compute_reachability(logprobs: list, baseline_logprobs: Optional[list] = None) -> float:
     if not logprobs:
         return 0.5
 
     def get_avg_logprob(lps: list) -> float:
-        # Extract valid logprobs, defaulting to -10.0 for missing data
         valid_lps = [t.get("logprob", -10.0) for t in lps if t.get("logprob") is not None]
         if not valid_lps:
             return -10.0
@@ -44,71 +44,96 @@ def _compute_reachability(
 
     variant_conf = get_avg_logprob(logprobs)
     
-    # We use a gentler steepness for sequence-level averages. 
-    # An average improvement of 0.5 logprobs per token is a massive shift.
-    STEEP = 2.0 
-    
     if baseline_logprobs and len(baseline_logprobs) > 0:
         baseline_conf = get_avg_logprob(baseline_logprobs)
-        
-        # CONTROL: Did the mutation make the model more decisive than the baseline?
         improvement = variant_conf - baseline_conf
-        
-        # Sigmoid centered at 0 (no improvement = 0.5 score)
         score = 1.0 / (1.0 + math.exp(-STEEP * improvement))
     else:
-        # COMFORT: Absolute decisiveness
-        # math.log(0.40) is ~ -0.91. We expect the model to have roughly 
-        # 40%+ average token probability if it is well-controlled.
-        REACHABLE_THRESHOLD = math.log(0.40) 
         score = 1.0 / (1.0 + math.exp(-STEEP * (variant_conf - REACHABLE_THRESHOLD)))
         
     return round(score, 4)
 
 
+def _creative_quality_heuristic(text: str) -> float:
+    """
+    Heuristic quality score for creative tasks when no logprobs
+    or judge are available.
+    
+    Combines two signals:
+      - Lexical diversit
+      - Length adequacy.
+    
+    returns: float in [0.0, 1.0].
+    """
+    tokens = text.lower().split()
+    if not tokens:
+        return 0.0
+    
+    # lexical diversity, type-token ratio, capped at 1.0
+    diversity = len(set(tokens)) / len(tokens)
+    
+    # length adequacy, sigmoid centered at 50 tokens
+    # < 10 tokens scores near 0, > 100 tokens scores near 1
+    import math
+    length_score = 1.0 / (1.0 + math.exp(-0.1 * (len(tokens) - 50)))
+    
+    return round(0.6 * diversity + 0.4 * length_score, 4)
 def score(
         result: VariantResult,
-        baseline_result: VariantResult | None = None,
+        baseline_result: Optional[VariantResult] = None,
         task: str = "",
         input_text: str = "",
         expected_output: str = "",
         use_judge: bool = False,
         backend: ModelBackend = ModelBackend.OLLAMA,
+        weights: Optional[dict] = None
     ) -> Score:
-    """`
-    Scores a variant result on three dimensions:
-
-    1. Reachability - did the prompt strongly control the output distribution?
-
-    2. Latency - did the model respond within the budget?
-
-    3. Length - did the response match the expected scope?
-
     """
+    Scores a variant result with consistent, flexible dimension weighting.
+    """
+    # Default weights guarantee stability across different configurations
+    if weights is None:
+        weights = {"quality": 0.20, "reachability": 0.60, "latency": 0.20}
+
     if baseline_result and baseline_result.logprobs:
-        reachability = _compute_reachability(
-            result.logprobs, 
-            baseline_logprobs=baseline_result.logprobs
-        )
+        reachability = _compute_reachability(result.logprobs, baseline_logprobs=baseline_result.logprobs)
     elif result.logprobs:
         reachability = _compute_reachability(result.logprobs)
     else:
-        reachability = _similarity(result.text, expected_output) # without logprobs similarity_score weights more
+        reachability = _similarity(result.text, expected_output)
 
+    # Latency
     latency_score = max(0.0, 1.0 - (result.latency_ms / LATENCY_BUDGET_MS))
-    similarity_score = _similarity(result.text, expected_output)
+    
+    quality_score = 0.5
+    similarity_score = 0.0
 
     if use_judge and task and input_text:
+        # Scenario A: juddge handles it intelligently (Best for creative/complex tasks)
         from core.evaluator.judge import judge
         quality_score = judge(task=task, input_text=input_text, output=result.text, backend=backend)
-        # Also compute similarity anyway
-        # Use quality_score in combined, similarity just for logging
-        combined = (0.50 * quality_score + 0.30 * reachability + 0.20 * latency_score)
         
+    elif task in OPEN_ENDED_TASKS:
+        if result.logprobs:
+            # Scenario B: creative task with logprobs. 
+            # Max out quality and let the optimizer focus entirely on reachability (confidence).
+            quality_score = 1.0 
+        else:
+            # Scenario C: creative task, no log probs, no judge
+            similarity_score = 0.0
+            quality_score = _creative_quality_heuristic(result.text)
+            
     else:
-        # No judge, so quality_score = similarity 
-        quality_score = similarity_score  
-        combined = (0.50 * reachability + 0.30 * latency_score + 0.20 * similarity_score)
+        # Scenario D: Standard strict tasks (classify, extract, etc.) 
+        similarity_score = _similarity(result.text, expected_output) if expected_output else 0.5
+        quality_score = similarity_score
+
+    # Consistent metric application
+    combined = (
+        weights["quality"] * quality_score + 
+        weights["reachability"] * reachability + 
+        weights["latency"] * latency_score
+    )
     
     return Score(
         reachability=reachability,

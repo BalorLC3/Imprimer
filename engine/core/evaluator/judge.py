@@ -169,29 +169,20 @@ def judge(
     input_text: str,
     output: str,
     backend: ModelBackend,
+    weights: dict | None = None
 ) -> float:
     """
     Scores output quality using a second LLM call as an impartial judge.
-    Returns a float between 0.0 and 1.0.
-
-    Scoring weights:
-      accuracy      50% getting the answer right is most important
-      completeness  30% covering the required content
-      conciseness   20% avoiding unnecessary verbosity
-
-    Cache: results are stored in a process-local fuzzy cache so highly
-    similar outputs for the same task/input reuse a prior score.
     """
+    if weights is None:
+        weights = {"accuracy": 0.50, "completeness": 0.30, "conciseness": 0.20}
+
     cached = _find_cached_judge_score(task, input_text, output)
     if cached is not None:
         logger.debug(f"judge cache hit score={cached:.4f}")
         return cached
 
-    prompt_text = JUDGE_PROMPT.format(
-        task=task,
-        input=input_text,
-        output=output,
-    )
+    prompt_text = JUDGE_PROMPT.format(task=task, input=input_text, output=output)
 
     try:
         if backend == ModelBackend.OLLAMA:
@@ -205,14 +196,15 @@ def judge(
 
         scores = _parse_scores(raw_text)
 
-        accuracy     = max(0.0, min(1.0, float(scores.get("accuracy",     0.5))))
+        accuracy     = max(0.0, min(1.0, float(scores.get("accuracy",  0.5))))
         completeness = max(0.0, min(1.0, float(scores.get("completeness", 0.5))))
         conciseness  = max(0.0, min(1.0, float(scores.get("conciseness",  0.5))))
 
+        # Flexible metric computation
         combined = round(
-            0.50 * accuracy +
-            0.30 * completeness +
-            0.20 * conciseness,
+            weights["accuracy"] * accuracy +
+            weights["completeness"] * completeness +
+            weights["conciseness"] * conciseness,
             4
         )
 
@@ -233,7 +225,5 @@ def judge(
         return combined
 
     except Exception as e:
-        # Judge failure must never crash the evaluation pipeline.
-        # Return neutral 0.5 so scoring continues without the judge signal.
         logger.warning(f"judge failed, returning neutral 0.5: {e}")
         return 0.5

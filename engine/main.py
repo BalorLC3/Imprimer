@@ -185,6 +185,7 @@ class PromptEngineServicer(imprimer_pb2_grpc.PromptEngineServicer):
             n_trials=request.n_trials if request.n_trials > 0 else 20,
             backend=backend,
             use_judge=request.use_judge,
+            use_rpe=False,
             target_reachability=request.target_reachability or 0.80,
             max_iterations=request.max_iterations if request.max_iterations > 0 else 3,
         )
