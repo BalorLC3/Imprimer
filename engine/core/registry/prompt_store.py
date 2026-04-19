@@ -196,21 +196,13 @@ def mark_best_optimization_trial(run_id: str, trial_number: int) -> None:
 
 
 def best_variant_for_task(task: str, limit: int = 10) -> dict:
-    """
-    Returns the highest-scoring variant for a given task
-    based on average reachability across recent evaluations.
-
-    This is how Imprimer learns over time - the registry accumulates
-    evidence about which prompts control the model most effectively
-    for each task type, and this query surfaces that knowledge.
-    """
     with _get_conn() as conn:
         rows = conn.execute("""
             SELECT
                 winner,
                 CASE WHEN winner = 'a' THEN variant_a ELSE variant_b END AS winning_template,
-                AVG(CASE WHEN winner = 'a' THEN reachability_a ELSE reachability_b END) AS avg_reachability,
-                AVG(CASE WHEN winner = 'a' THEN score_a ELSE score_b END) AS avg_score,
+                COALESCE(AVG(CASE WHEN winner = 'a' THEN reachability_a ELSE reachability_b END), 0.0) AS avg_reachability,
+                COALESCE(AVG(CASE WHEN winner = 'a' THEN score_a ELSE score_b END), 0.0) AS avg_score,
                 COUNT(*) as evaluations
             FROM evaluations
             WHERE task = ?
@@ -224,7 +216,7 @@ def best_variant_for_task(task: str, limit: int = 10) -> dict:
     return {
         "task": task,
         "best_template": rows[0]["winning_template"],
-        "avg_reachability": round(rows[0]["avg_reachability"], 4),
-        "avg_score": round(rows[0]["avg_score"], 4),
+        "avg_reachability": round(float(rows[0]["avg_reachability"]), 4),
+        "avg_score": round(float(rows[0]["avg_score"]), 4),
         "evaluations_sampled": rows[0]["evaluations"],
     }

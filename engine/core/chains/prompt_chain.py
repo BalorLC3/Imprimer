@@ -22,6 +22,16 @@ class VariantResult:
     latency_ms: float
     logprobs: list = field(default_factory=list)
 
+def _normalize_template(template: str) -> str:
+    """
+    Ensures the {input} placeholder exists in the template.
+    If the user forgot it, automatically append it to the end.
+    """
+    if "{input}" not in template:
+        # Append it cleanly with a separator
+        return f"{template.strip()}\n\n{{input}}"
+    return template
+
 
 def _build_openai_llm():
     from langchain_openai import ChatOpenAI
@@ -189,8 +199,10 @@ def run_variant(
       OPENAI  - external API, full logprobs, stronger base model
 
     """
+    safe_template = _normalize_template(template) # normalizing to ensure {input} exists
+
     prompt = PromptTemplate(
-        template=template,
+        template=safe_template,
         input_variables=["task", "input"]
     )
     
