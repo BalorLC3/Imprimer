@@ -398,10 +398,6 @@ def query_best(task, limit):
 # Source: https://huggingface.co/inference/models
 HF_FREE_MODELS = [
     "meta-llama/Llama-3.2-1B-Instruct",
-    "meta-llama/Llama-3.2-3B-Instruct",
-    "HuggingFaceH4/zephyr-7b-beta",
-    "microsoft/Phi-3-mini-4k-instruct",
-    "google/gemma-2-2b-it",
 ]
 
 with gr.Blocks(title="Imprimer - LLM Prompt Control") as demo:
