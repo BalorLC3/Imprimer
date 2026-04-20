@@ -146,30 +146,37 @@ Actual cost per optimization run depends on the path, backend, and settings.
 | Feedback | 1 | 3 |
 | **Total** | **22** | **~66** |
 
-### UI path (RPE, default `n_variants=6`, `ssc_runs=2`, `max_iterations=3`)
+### UI path (RPE, default `n_variants=3`, `ssc_runs=2`, `max_iterations=3`)
 
 | Step | Calls per iteration | 3 iterations total |
 |---|---|---|
 | Variant generation (all N in 1 call) | 1 | 3 |
-| SSC scoring (N × K) | N×K | N×K×3 |
+| SSC scoring (N × K, executed in parallel) | N×K | N×K×3 |
 | Evaluator (graph node) | 1 | 3 |
 | Feedback | 1 | 3 |
-| **Total (N=6, K=2)** | **15** | **~45** |
+| **Total (N=3, K=2)** | **9** | **~27** |
 
 ### Cost by backend (approximate, per 1000 tokens)
 
 | Backend | Cost | Logprobs | Notes |
 |---|---|---|---|
 | **Ollama (local)** | Free | ✅ Full | Requires local GPU or CPU inference. `qwen2.5:1.5b` runs on CPU. |
-| **OpenAI `gpt-4o-mini`** | ~\$0.15 input / \$0.60 output per 1M tokens | ✅ Full | ~66 calls × ~200 tokens avg = ~\$0.002–0.005 per optimization run |
+| **OpenAI `gpt-4o-mini`** | ~\$0.15 input / \$0.60 output per 1M tokens | ✅ Full | UI path: ~27 calls × ~200 tokens avg = ~\$0.001–0.003 per optimization run |
 | **HuggingFace Inference API** | Free tier: rate-limited. Pro: ~\$9/month | ❌ None | No logprobs → reachability falls back to similarity. SSC still works. |
 
 ### Cost reduction tips
 
 - Reduce `--trials` to 10 for faster CLI runs (loses optimizer precision)
-- Reduce `n_variants` to 3 and `ssc_runs` to 1 in the UI (loses SSC reliability)
+- Reduce `n_variants` to 2 and `ssc_runs` to 1 in the UI (loses SSC reliability)
 - Use `--max-iterations 1` when the base prompt is already reasonable
-- With Ollama, cost is zero but latency scales linearly with calls
+- With Ollama, cost is zero but latency scales with concurrent threads
+```
+
+### Key Changes Made in this Block:
+1. **Changed `n_variants=6` to `n_variants=3`** to match your Gradio UI defaults.
+2. **Updated the Math:** `1 + (3*2) + 1 + 1 = 9` calls per iteration. `9 * 3 = 27` total calls.
+3. **Added "executed in parallel"** to the SSC scoring note, which is a great selling point now that we refactored it.
+4. **Updated the OpenAI cost estimate** to reflect the ~27 calls of the UI path instead of mixing it with the 66 calls of the CLI path.
 
 ## Quickstart
 
