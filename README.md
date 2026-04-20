@@ -16,7 +16,7 @@
 
 > *"To imprint a mental pattern."*
 >
-> Inspired by Minsky's *The Society of Mind* (1986): a prompt does not instruct a unified intelligence but it **activates a specific configuration** of the model's internal society. Imprimer makes that activation measurable, comparable, and improvable over time.
+> Inspired by Minsky's *The Society of Mind* (1986): a prompt does not instruct a unified intelligence but it **activates a specific configuration** of the model's internal society. Imprimer makes that activation measurable, comparable, and improvable over time. 
 
 ---
 
@@ -28,6 +28,7 @@ Given a task and two prompt variants, Imprimer asks: which prompt gives you more
 
 Every evaluation is persisted. Over time, the system learns which prompts control each task most effectively and surfaces that knowledge through the `best` command and `/best` endpoint.
 
+A __demo__ for the Reflective Optimizaiton Evolution version is available at [imprimer](https://balor78-imprimer.hf.space/), because the project requires a large number of LLM calls I recommend using local models.
 
 ## Theoretical foundation
 
@@ -78,22 +79,28 @@ Given a task $x_0$, Imprimer optimizes prompts $u$ to maximize semantic alignmen
   <img src="docs/assets/llmcontrol.drawio.png" height="240" alt="LLMs control framework">
 </p>
 
+## Architecture
+
+Imprimer is two services connected by a gRPC contract. The proto file is the single source of truth — Go and Python never share code, only the contract. The diagram below shows the information flow. The orchestrator cycle integrates the **reflective agent** pattern: the reflection (evaluation) node analyzes outputs and returns a feedback signal, creating the improvement loop.
+
+<p align="center">
+  <img src="docs/assets/show-arch.drawio.png" height="350" alt="Architecture diagram">
+</p>
+
+**Go handles:** HTTP ingress, authentication, audit logging, Prometheus metrics, gRPC routing.
+
+**Python handles:** LLM inference (Ollama, OpenAI, HuggingFace), logprob extraction, reachability computation, LLM-as-judge scoring, Optuna/RPE optimization, injection scanning, registry persistence.
+
+**Boundary:** `proto/imprimer.proto` — three RPCs, never more complexity than needed.
+
+A Command Line Interface is integrated for immediate use. See [Imprimer CLI](./docs/cli-imprimer.md).
+
+
 
 #### Scoring function
 
 Imprimer uses a **task-aware, backend-adaptive scoring function** that routes through four scenarios depending on what signals are available.
 
-
-### Scenario C — creative quality heuristic
-
-When no logprobs or judge are available for creative tasks (`summarize`, `creative_writing`, `roleplay`, `reasoning`, `code_generation`, `rewrite`), similarity to an expected output is meaningless — there is no single correct creative output. Instead, Imprimer uses a **lexical diversity + length adequacy** proxy:
-
-$$q_{\text{creative}} = 0.6 \times \frac{|\text{unique tokens}|}{|\text{total tokens}|} + 0.4 \times \sigma\big(0.1 \times (|\text{tokens}| - 50)\big)$$
-
-- **Lexical diversity** (type-token ratio): high diversity signals the model is being generative, not repetitive
-- **Length adequacy**: sigmoid centered at 50 tokens — very short outputs score near 0, substantive outputs score near 1
-
-This is directionally correct: a prompt that elicits varied, substantive creative output is exerting better control than one that produces terse or repetitive responses.
 
 ## Optimization
 
@@ -113,15 +120,6 @@ Mutations are searched one dimension at a time across graph iterations, preventi
 
 Used in the Gradio interface. Instead of predefined mutations, the LLM generates its own variant prompts based on the current best and verbal feedback from prior rounds — an open-ended search that can discover transformations spaCy mutations cannot.
 
-**One RPE iteration:**
-
-```
-1 call  → LLM generates N variant prompts (verbalized sampling)
-N × 2 calls → each variant scored with SSC (Semantic Self-Consistency)
-1 call  → feedback: LLM explains why the best variant won
-─────────────────────────────────────────────────────────
-~N×2 + 2 calls per iteration
-```
 
 **Semantic Self-Consistency (SSC):** run the same prompt K times at temperature > 0 and measure average pairwise semantic similarity of the K outputs. High SSC → the prompt reliably steers the model to similar outputs. Low SSC → the prompt leaves too much to chance.
 
@@ -165,24 +163,6 @@ Actual cost per optimization run depends on the path, backend, and settings.
 - Reduce `n_variants` to 3 and `ssc_runs` to 1 in the UI (loses SSC reliability)
 - Use `--max-iterations 1` when the base prompt is already reasonable
 - With Ollama, cost is zero but latency scales linearly with calls
-
-
-## Architecture
-
-Imprimer is two services connected by a gRPC contract. The proto file is the single source of truth — Go and Python never share code, only the contract. The diagram below shows the information flow. The orchestrator cycle integrates the **reflective agent** pattern: the reflection (evaluation) node analyzes outputs and returns a feedback signal, creating the improvement loop.
-
-<p align="center">
-  <img src="docs/assets/show-arch.drawio.png" height="350" alt="Architecture diagram">
-</p>
-
-**Go handles:** HTTP ingress, authentication, audit logging, Prometheus metrics, gRPC routing.
-
-**Python handles:** LLM inference (Ollama, OpenAI, HuggingFace), logprob extraction, reachability computation, LLM-as-judge scoring, Optuna/RPE optimization, injection scanning, registry persistence.
-
-**Boundary:** `proto/imprimer.proto` — three RPCs, never more complexity than needed.
-
-A Command Line Interface is integrated for immediate use. See [Imprimer CLI](./docs/cli-imprimer.md).
-
 
 ## Quickstart
 
