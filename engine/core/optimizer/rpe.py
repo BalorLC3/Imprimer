@@ -278,7 +278,7 @@ def run_rpe(
             norm_exp = expected_output.strip().lower()
             # If expected is "yes", and output is "yes, the child can", sim = 1.0
             if norm_exp in norm_out:
-                    sim = 1.0
+                sim = 1.0
             else:
                 sim = similarity(result.text, expected_output)
         elif task in OPEN_ENDED_TASKS:
