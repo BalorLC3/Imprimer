@@ -232,6 +232,6 @@ protoc -I proto \
 
 ## References
 
-This work draws inspiration from What's the Magic Word? A Control Theory of LLM Prompting [What's the magic world?](https://arxiv.org/abs/2310.04444) and [Optimizing Acquisition Functions](https://arxiv.org/html/2505.17151). The ideas presented here are shaped by these foundational perspectives on control, but the synthesis and applications are my own.
+This work draws inspiration from [What's the magic world?: A Control Theory of LLM Prompting](https://arxiv.org/abs/2310.04444) and [Optimizing Acquisition Functions](https://arxiv.org/html/2505.17151). The ideas presented here are shaped by these foundational perspectives on control, but the synthesis and applications are my own.
 
 
