@@ -1,12 +1,17 @@
 """
 LLM-as-judge scores output quality on a 0.0-1.0 scale. Is going to be deprecated in future versions.
 """
+
 import json
 import re
 import os
 import requests
 
-from core.chains.prompt_chain import ModelBackend, _build_openai_llm, _build_huggingface_llm
+from core.chains.prompt_chain import (
+    ModelBackend,
+    _build_openai_llm,
+    _build_huggingface_llm,
+)
 from utils.create_logger import get_logger
 
 logger = get_logger(__name__)
@@ -34,7 +39,8 @@ Example:
 
 Your response:
 {{"accuracy": <score>, "completeness": <score>, "conciseness": <score>}}
-""" # For debug add "reasoning": <brief explanation of the score, optional>
+"""  # For debug add "reasoning": <brief explanation of the score, optional>
+
 
 def _parse_scores(text: str) -> dict:
     """
@@ -43,15 +49,15 @@ def _parse_scores(text: str) -> dict:
     despite being told not to.
     """
     # Strip markdown code fences if present
-    cleaned = re.sub(r'```json\s*', '', text)
-    cleaned = re.sub(r'```\s*', '', cleaned)
+    cleaned = re.sub(r"```json\s*", "", text)
+    cleaned = re.sub(r"```\s*", "", cleaned)
     cleaned = cleaned.strip()
 
     try:
-        match = re.search(r'\{[^}]+\}', cleaned, re.DOTALL)
+        match = re.search(r"\{[^}]+\}", cleaned, re.DOTALL)
         if match:
             data = json.loads(match.group())
-            return { 
+            return {
                 "accuracy": data.get("accuracy", 0.5),
                 "completeness": data.get("completeness", 0.5),
                 "conciseness": data.get("conciseness", 0.5),
@@ -78,8 +84,8 @@ def _run_judge_ollama(prompt_text: str) -> str:
         "messages": [{"role": "user", "content": prompt_text}],
         "stream": False,
         "options": {
-            "temperature": 0.0, # https://arxiv.org/html/2603.28304v1
-        }
+            "temperature": 0.0,  # https://arxiv.org/html/2603.28304v1
+        },
     }
 
     resp = requests.post(
@@ -89,8 +95,9 @@ def _run_judge_ollama(prompt_text: str) -> str:
     )
     resp.raise_for_status()
     content = resp.json().get("message", {}).get("content", "")
-    # print(f"RAW JUDGE RESPONSE: {repr(content)}")  
+    # print(f"RAW JUDGE RESPONSE: {repr(content)}")
     return content
+
 
 def _run_judge_huggingface(prompt_text: str) -> str:
     """
@@ -98,13 +105,13 @@ def _run_judge_huggingface(prompt_text: str) -> str:
     Uses the reusable client, no logprobs needed.
     """
     client = _build_huggingface_llm()
-    
+
     response = client.chat_completion(
         messages=[{"role": "user", "content": prompt_text}],
         temperature=0.01,  # HF Inference API prefers > 0 for temperature
-        max_tokens=50,     # Just enough for a score and brief reasoning
+        max_tokens=50,  # Just enough for a score and brief reasoning
     )
-    
+
     content = response.choices[0].message.content
     return content
 
@@ -154,11 +161,11 @@ def _find_cached_judge_score(
             logger.debug("judge exact cache hit")
             return float(entry["score"])
 
-        similarity = _get_jaccard_similarity(generated_output, entry["generated_output"])
+        similarity = _get_jaccard_similarity(
+            generated_output, entry["generated_output"]
+        )
         if similarity >= SIMILARITY_THRESHOLD:
-            logger.debug(
-                "judge fuzzy cache hit similarity=%.3f", similarity
-            )
+            logger.debug("judge fuzzy cache hit similarity=%.3f", similarity)
             return float(entry["score"])
 
     return None
@@ -169,7 +176,7 @@ def judge(
     input_text: str,
     output: str,
     backend: ModelBackend,
-    weights: dict | None = None
+    weights: dict | None = None,
 ) -> float:
     """
     Scores output quality using a second LLM call as an impartial judge.
@@ -196,16 +203,16 @@ def judge(
 
         scores = _parse_scores(raw_text)
 
-        accuracy     = max(0.0, min(1.0, float(scores.get("accuracy",  0.5))))
+        accuracy = max(0.0, min(1.0, float(scores.get("accuracy", 0.5))))
         completeness = max(0.0, min(1.0, float(scores.get("completeness", 0.5))))
-        conciseness  = max(0.0, min(1.0, float(scores.get("conciseness",  0.5))))
+        conciseness = max(0.0, min(1.0, float(scores.get("conciseness", 0.5))))
 
         # Flexible metric computation
         combined = round(
-            weights["accuracy"] * accuracy +
-            weights["completeness"] * completeness +
-            weights["conciseness"] * conciseness,
-            4
+            weights["accuracy"] * accuracy
+            + weights["completeness"] * completeness
+            + weights["conciseness"] * conciseness,
+            4,
         )
 
         logger.info(
@@ -216,12 +223,14 @@ def judge(
             f"combined={combined:.4f}"
         )
 
-        _JUDGE_CACHE.append({
-            "task": task,
-            "input_text": input_text,
-            "generated_output": output,
-            "score": combined,
-        })
+        _JUDGE_CACHE.append(
+            {
+                "task": task,
+                "input_text": input_text,
+                "generated_output": output,
+                "score": combined,
+            }
+        )
         return combined
 
     except Exception as e:

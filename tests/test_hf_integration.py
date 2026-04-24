@@ -1,5 +1,6 @@
 def test_hf_model_integration():
     from transformers import AutoModel, AutoTokenizer
+
     # for some reason this was causing a lot of trouble in hf
     model_name = "HuggingFaceTB/SmolLM2-1.7B-Instruct"
     try:

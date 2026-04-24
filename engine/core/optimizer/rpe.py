@@ -1,5 +1,5 @@
 """
-Reflective Prompt Optimization 
+Reflective Prompt Optimization
 
 Replaces the Optuna TPE inner loop with LLM-driven candidate generation.
 Instead of searching over predefined mutation keys, the LLM generates its own
@@ -9,9 +9,9 @@ Semantic Self-Consistency (SSC): Run the same prompt K times at temperature > 0.
                                  Average pairwise semantic similarity of the K outputs.
                                  High SSC -> prompt reliably steers the model to similar outputs.
                                  Low SSC -> model is uncertain, prompt leaves too much to chance.
----                                 
-Here reachability is an optional metric. When the backend supports logprobs 
-(e.g., ollama and openai). Mostly logprobs are unavailable, so SSC is more stable. 
+---
+Here reachability is an optional metric. When the backend supports logprobs
+(e.g., ollama and openai). Mostly logprobs are unavailable, so SSC is more stable.
 """
 
 import json
@@ -21,15 +21,11 @@ from dataclasses import dataclass, field
 import os
 from typing import Optional
 
-from core.chains.prompt_chain import (
-    ModelBackend, 
-    run_variants_parallel,
-    call_llm
-)
+from core.chains.prompt_chain import ModelBackend, run_variants_parallel, call_llm
 from core.evaluator.scorer import (
-    _compute_reachability, 
-    OPEN_ENDED_TASKS, 
-    _creative_quality_heuristic
+    _compute_reachability,
+    OPEN_ENDED_TASKS,
+    _creative_quality_heuristic,
 )
 from core.evaluator.embedder import pairwise_similarity, similarity
 from utils.create_logger import get_logger
@@ -46,7 +42,9 @@ class RPEResult:
     best_prompt: str
     best_score: float
     best_reachability: float  # 0.5 neutral when logprobs unavailable
-    best_ssc: float = 0.5    # SSC of the winning variant; fallback control signal when logprobs absent
+    best_ssc: float = (
+        0.5  # SSC of the winning variant; fallback control signal when logprobs absent
+    )
     history: list = field(default_factory=list)
 
 
@@ -67,10 +65,7 @@ def _generate_variants(
     """
     anchor = current_best_prompt if current_best_prompt else base_prompt
 
-    feedback_line = (
-        f"\nPrevious feedback: {feedback}\n"
-        if feedback else ""
-    )
+    feedback_line = f"\nPrevious feedback: {feedback}\n" if feedback else ""
 
     # Short, concrete, no jargon for small models
     generation_prompt = (
@@ -94,9 +89,9 @@ def _generate_variants(
         )
 
         # Try strict JSON parse first
-        cleaned = re.sub(r'```json\s*', '', raw)
-        cleaned = re.sub(r'```\s*', '', cleaned).strip()
-        match = re.search(r'\[.*?\]', cleaned, re.DOTALL)
+        cleaned = re.sub(r"```json\s*", "", raw)
+        cleaned = re.sub(r"```\s*", "", cleaned).strip()
+        match = re.search(r"\[.*?\]", cleaned, re.DOTALL)
         if match:
             try:
                 variants = json.loads(match.group())
@@ -136,37 +131,37 @@ def _generate_variants(
 
 
 def _compute_ssc(
-        prompt: str,
-        input_example: str,
-        task: str, 
-        backend: ModelBackend,
-        k: int = SSC_RUNS,
-        temperature: float = SSC_TEMPERATURE,
+    prompt: str,
+    input_example: str,
+    task: str,
+    backend: ModelBackend,
+    k: int = SSC_RUNS,
+    temperature: float = SSC_TEMPERATURE,
 ) -> tuple[float, float, str]:
     """
-    Semantic Self-Consistency score for one prompt. Runs the prompt K times and 
-    computes average pairwise semantic similarity. Also returns the average 
+    Semantic Self-Consistency score for one prompt. Runs the prompt K times and
+    computes average pairwise semantic similarity. Also returns the average
     reachability if logprobs are available.
     """
     # Create K copies of the same prompt template to run in parallel
     variant_copies = [prompt] * k
-    
+
     results = run_variants_parallel(
         templates=variant_copies,
         input_text=input_example,
         task=task,
         backend=backend,
         temperature=temperature,
-        max_workers=k  # Run all K simultaneously
+        max_workers=k,  # Run all K simultaneously
     )
-    
+
     outputs = []
     reachabilities = []
-    
+
     for r in results:
         if r.text.strip():
             outputs.append(r.text)
-            
+
         if r.logprobs:
             reachabilities.append(_compute_reachability(r.logprobs))
         else:
@@ -195,7 +190,7 @@ def run_rpe(
     weights: Optional[dict] = None,
     current_best_prompt: Optional[str] = None,
 ) -> RPEResult:
-    
+
     if weights is None:
         if task in OPEN_ENDED_TASKS:
             weights = {"ssc": 0.5, "reach": 0.3, "sim": 0.2}
@@ -206,8 +201,10 @@ def run_rpe(
                 logger.info("Using deterministic weights (prioritizing Similarity)")
             else:
                 weights = {"ssc": 0.4, "reach": 0.4, "sim": 0.2}
-                logger.info("Using deterministic weights without reference (SSC+Reachability)")
-            
+                logger.info(
+                    "Using deterministic weights without reference (SSC+Reachability)"
+                )
+
     from core.evaluator.embedder import similarity as semantic_sim
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -234,9 +231,9 @@ def run_rpe(
     best_ssc = 0.5
 
     # FIX: Parallelize the scoring of all variants simultaneously
-    # Instead of a sequential `for variant in variants:` loop, we submit 
+    # Instead of a sequential `for variant in variants:` loop, we submit
     # all _compute_ssc calls to a thread pool.
-    
+
     def _score_variant(variant_str):
         """Helper to score a single variant, run inside the thread."""
         ssc, reach, sample_output = _compute_ssc(
@@ -263,12 +260,9 @@ def run_rpe(
             sim = 0.5
 
         combined = round(
-            weights["ssc"] * ssc + 
-            weights["reach"] * reach + 
-            weights["sim"] * sim, 
-            4
+            weights["ssc"] * ssc + weights["reach"] * reach + weights["sim"] * sim, 4
         )
-        
+
         return {
             "variant": variant_str,
             "ssc": ssc,
@@ -283,12 +277,12 @@ def run_rpe(
         future_to_idx = {
             executor.submit(_score_variant, v): i for i, v in enumerate(variants)
         }
-        
+
         for future in as_completed(future_to_idx):
             idx = future_to_idx[future]
             try:
                 result = future.result()
-                
+
                 logger.info(
                     f"variant={idx} ssc={result['ssc']:.4f} reach={result['reachability']:.4f} "
                     f"sim={result['similarity']:.4f} combined={result['score']:.4f}"
@@ -301,7 +295,7 @@ def run_rpe(
                     best_prompt = result["variant"]
                     best_reachability = result["reachability"]
                     best_ssc = result["ssc"]
-                    
+
             except Exception as e:
                 logger.error(f"Variant {idx} scoring failed: {e}")
 

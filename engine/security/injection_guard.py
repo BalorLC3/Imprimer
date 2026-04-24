@@ -10,6 +10,7 @@ ISO 27001 mapping:
   A.12.6 - Technical vulnerability management
   A.14.2 - Security in development and support processes
 """
+
 import re
 from utils.create_logger import get_logger
 
@@ -29,8 +30,8 @@ _INJECTION_PATTERNS = [
     r"jailbreak",
     r"system\s*prompt\s*:",
     r"<\s*system\s*>",
-    r"\[INST\]",                    # Llama instruction injection
-    r"###\s*instruction",           # Common prompt boundary exploit
+    r"\[INST\]",  # Llama instruction injection
+    r"###\s*instruction",  # Common prompt boundary exploit
 ]
 
 _COMPILED = [re.compile(p, re.IGNORECASE) for p in _INJECTION_PATTERNS]
@@ -39,8 +40,8 @@ _COMPILED = [re.compile(p, re.IGNORECASE) for p in _INJECTION_PATTERNS]
 # In a full ISO 27001 implementation these would trigger data
 # classification escalation, not just a log warning.
 _PII_PATTERNS = [
-    r"\b\d{3}-\d{2}-\d{4}\b",           # SSN
-    r"\b\d{16}\b",                        # Credit card
+    r"\b\d{3}-\d{2}-\d{4}\b",  # SSN
+    r"\b\d{16}\b",  # Credit card
     r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",  # Email
 ]
 
@@ -49,6 +50,7 @@ _PII_COMPILED = [re.compile(p) for p in _PII_PATTERNS]
 
 class InjectionDetected(Exception):
     """Raised when a prompt variant contains injection patterns."""
+
     pass
 
 

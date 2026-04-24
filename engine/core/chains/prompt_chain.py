@@ -7,7 +7,7 @@ import hashlib
 import json
 
 
-from langchain_core.prompts import PromptTemplate # to rid off i/o bounding in ollama
+from langchain_core.prompts import PromptTemplate  # to rid off i/o bounding in ollama
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils.create_logger import get_logger
 
@@ -29,8 +29,8 @@ TASK_MAX_TOKENS = {
 }
 
 
-
 _VARIANT_CACHE = {}
+
 
 class ModelBackend(Enum):
     OPENAI = "openai"
@@ -55,6 +55,7 @@ def _normalize_template(template: str) -> str:
 
 def _build_openai_llm():
     from langchain_openai import ChatOpenAI
+
     return ChatOpenAI(
         model=os.getenv("OPENAI_MODEL"),
         temperature=0,
@@ -88,20 +89,19 @@ def _extract_openai_logprobs(response) -> list:
         return []
 
 
-
 def _build_huggingface_llm():
     """
     Builds and returns a reusable Hugging Face InferenceClient.
     Defaults to Zephyr or Llama-3, which are free on the Serverless API.
     """
     from huggingface_hub import InferenceClient
-    
+
     token = os.getenv("HF_TOKEN")
     if not token:
         raise RuntimeError("HF_TOKEN is not set in your environment.")
-        
+
     model_id = os.getenv("HF_MODEL_ID", "meta-llama/Meta-Llama-3-8B-Instruct")
-    
+
     # We bind the model ID to the client here, so it acts just like your OpenAI llm object
     return InferenceClient(model=model_id, token=token)
 
@@ -116,7 +116,7 @@ def _extract_hf_api_logprobs(response) -> list:
         lp_content = response.choices[0].logprobs.content
         if not lp_content:
             return []
-            
+
         return [
             {
                 "token": td.token,
@@ -132,10 +132,12 @@ def _extract_hf_api_logprobs(response) -> list:
         return []
 
 
-def _run_ollama(prompt_text: str, temperature: float = 0.0, max_tokens: int = 150) -> VariantResult:
+def _run_ollama(
+    prompt_text: str, temperature: float = 0.0, max_tokens: int = 150
+) -> VariantResult:
     """
     Calls Ollama /api/chat with logprobs enabled.
-    
+
     We normalize this into the same shape as the OpenAI extractor
     so the scorer receives identical input regardless of backend.
     """
@@ -158,8 +160,8 @@ def _run_ollama(prompt_text: str, temperature: float = 0.0, max_tokens: int = 15
             "temperature": temperature,
             "top_p": 0.95,
             "top_k": 50,
-            "num_predict": max_tokens
-        }
+            "num_predict": max_tokens,
+        },
     }
 
     start = time.time()
@@ -176,7 +178,7 @@ def _run_ollama(prompt_text: str, temperature: float = 0.0, max_tokens: int = 15
     # Text lives under message.content in /api/chat
     text = data.get("message", {}).get("content", "")
 
-    # Logprobs are at the top level 
+    # Logprobs are at the top level
     raw = data.get("logprobs") or []
     logprobs = [
         {
@@ -210,14 +212,16 @@ def run_variants_parallel(
     Bypasses GIL since requests.post is I/O bound.
     """
     results = [None] * len(templates)
-    
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all jobs to the thread pool
         future_to_index = {
-            executor.submit(run_variant, tpl, input_text, task, backend, temperature): idx 
+            executor.submit(
+                run_variant, tpl, input_text, task, backend, temperature
+            ): idx
             for idx, tpl in enumerate(templates)
         }
-        
+
         # Collect results as they complete
         for future in as_completed(future_to_index):
             idx = future_to_index[future]
@@ -227,7 +231,7 @@ def run_variants_parallel(
                 logger.error(f"parallel variant failed: {e}")
                 # Fallback to a failed result so the list maintains order
                 results[idx] = VariantResult(text="", latency_ms=0, logprobs=[])
-                
+
     return results
 
 
@@ -259,6 +263,7 @@ def call_llm(
 
     elif backend == ModelBackend.OPENAI:
         from langchain_openai import ChatOpenAI
+
         llm = ChatOpenAI(
             model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
             temperature=temperature,
@@ -284,7 +289,7 @@ def run_variant(
     task: str = "",
     backend: ModelBackend = ModelBackend.OLLAMA,
     temperature: float = 0.0,
-    use_cache: bool = True
+    use_cache: bool = True,
 ) -> VariantResult:
     """
     Runs one prompt variant and returns what the model produced.
@@ -295,35 +300,42 @@ def run_variant(
       HUGGINGFACE - external API, logprobs when supported by provider
 
     """
-    cache_state = json.dumps({
-        "template": template, 
-        "input_text": input_text, 
-        "task": task, 
-        "backend": backend.value,
-        "temperature": temperature,
-    }, sort_keys=True)
+    cache_state = json.dumps(
+        {
+            "template": template,
+            "input_text": input_text,
+            "task": task,
+            "backend": backend.value,
+            "temperature": temperature,
+        },
+        sort_keys=True,
+    )
 
-    key = hashlib.sha256(cache_state.encode('utf-8')).hexdigest()
-    
-    if use_cache and temperature ==0.0 and key in _VARIANT_CACHE:
+    key = hashlib.sha256(cache_state.encode("utf-8")).hexdigest()
+
+    if use_cache and temperature == 0.0 and key in _VARIANT_CACHE:
         return _VARIANT_CACHE[key]
-    
+
     if "{input}" in template:
-        safe_template = _normalize_template(template) # normalizing to ensure {input} exists
+        safe_template = _normalize_template(
+            template
+        )  # normalizing to ensure {input} exists
 
         prompt = PromptTemplate(
             template=safe_template,
             input_variables=["task", "input"],
         )
         rendered = prompt.format(task=task, input=input_text)
-    else: 
+    else:
         # template does not use {input}, render as is
         rendered = template.format(task=task) if "{task}" in template else template
 
     max_tokens = TASK_MAX_TOKENS.get(task, 150)
 
     if backend == ModelBackend.OLLAMA:
-        result = _run_ollama(prompt_text=rendered, temperature=temperature, max_tokens=max_tokens)
+        result = _run_ollama(
+            prompt_text=rendered, temperature=temperature, max_tokens=max_tokens
+        )
 
     elif backend == ModelBackend.OPENAI:
         llm = _build_openai_llm()
@@ -337,10 +349,9 @@ def run_variant(
             logprobs=_extract_openai_logprobs(response),
         )
 
-
     elif backend == ModelBackend.HUGGINGFACE:
         client = _build_huggingface_llm()
-        
+
         start = time.time()
         response = client.chat_completion(
             messages=[{"role": "user", "content": rendered}],
@@ -350,18 +361,18 @@ def run_variant(
             top_logprobs=5,
         )
         elapsed_ms = (time.time() - start) * 1000
-        
+
         text = response.choices[0].message.content
-        
+
         result = VariantResult(
             text=text,
             latency_ms=round(elapsed_ms, 2),
             logprobs=_extract_hf_api_logprobs(response),
         )
-    
+
     else:
         raise ValueError(f"Unknown backend: {backend}")
-    
+
     # caching to avoid trials and iterations
     # fix: only cache deterministic calls
     if use_cache and temperature == 0.0:

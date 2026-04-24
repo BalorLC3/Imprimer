@@ -12,6 +12,7 @@ from utils.create_logger import get_logger
 
 logger = get_logger(__name__)
 
+
 @dataclass
 class TokenConfidence:
     token: str
@@ -42,7 +43,7 @@ def analyze(
     Runs the prompt N times and measures output stability.
     """
     templates = [prompt] * n_runs
-    
+
     # This uses the exact same formatting and execution logic as the optimizer
     results = run_variants_parallel(
         templates=templates,
@@ -50,7 +51,7 @@ def analyze(
         task=task,
         backend=backend,
         max_workers=n_runs,
-        temperature=temperature
+        temperature=temperature,
     )
 
     outputs = []
@@ -61,11 +62,11 @@ def analyze(
     # process the parallel results
     for i, r in enumerate(results):
         if not r.text and not r.logprobs:
-            continue # Skip completely failed calls
-            
+            continue  # Skip completely failed calls
+
         outputs.append(r.text)
         output_lengths.append(len(r.text))
-        
+
         if r.logprobs:
             reachability = _compute_reachability(r.logprobs)
             reachabilities.append(reachability)
@@ -75,7 +76,7 @@ def analyze(
             all_logprobs.append([])
 
         logger.info(
-            f"stability run={i+1}/{n_runs} "
+            f"stability run={i + 1}/{n_runs} "
             f"reachability={reachabilities[-1]:.4f} "
             f"output_len={len(r.text)}"
         )
@@ -83,9 +84,13 @@ def analyze(
     # Handle edge case where all runs failed
     if not outputs:
         return StabilityResult(
-            outputs=[""], avg_reachability=0.0, variance=0.0,
-            avg_similarity=0.0, stability_score=0.0, token_confidence=[],
-            recommendation="🔴 All stability runs failed. Check backend connection or prompt formatting."
+            outputs=[""],
+            avg_reachability=0.0,
+            variance=0.0,
+            avg_similarity=0.0,
+            stability_score=0.0,
+            token_confidence=[],
+            recommendation="🔴 All stability runs failed. Check backend connection or prompt formatting.",
         )
 
     avg_reachability = round(sum(reachabilities) / len(reachabilities), 4)
@@ -101,10 +106,10 @@ def analyze(
     # Composite stability score
     normalized_variance = min(1.0, variance / 0.1)
     stability_score = round(
-        0.4 * avg_reachability +
-        0.4 * avg_similarity +
-        0.2 * (1.0 - normalized_variance),
-        4
+        0.4 * avg_reachability
+        + 0.4 * avg_similarity
+        + 0.2 * (1.0 - normalized_variance),
+        4,
     )
 
     # Token confidence from first run - used for visualization
@@ -115,11 +120,13 @@ def analyze(
             top_probs = [math.exp(t["logprob"]) for t in entry.get("top", [])]
             total = sum(top_probs) or chosen_prob
             certainty = round(chosen_prob / total, 4) if total > 0 else 0.5
-            token_confidence.append(TokenConfidence(
-                token=entry.get("token", ""),
-                logprob=round(entry.get("logprob", -10.0), 4),
-                certainty=certainty,
-            ))
+            token_confidence.append(
+                TokenConfidence(
+                    token=entry.get("token", ""),
+                    logprob=round(entry.get("logprob", -10.0), 4),
+                    certainty=certainty,
+                )
+            )
 
     length_warning = ""
     if output_lengths:

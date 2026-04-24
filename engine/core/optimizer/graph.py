@@ -26,7 +26,11 @@ from core.optimizer.nodes import (
 )
 from core.chains.prompt_chain import ModelBackend, run_variant
 from core.evaluator.scorer import score as compute_score
-from core.registry.prompt_store import OptimizationTrialRecord, save_optimization_trial, mark_best_optimization_trial
+from core.registry.prompt_store import (
+    OptimizationTrialRecord,
+    save_optimization_trial,
+    mark_best_optimization_trial,
+)
 from utils.create_logger import get_logger
 from typing import Generator
 
@@ -49,7 +53,7 @@ def _build_graph() -> StateGraph:
         {
             "generator": "generator",
             "end": END,
-        }
+        },
     )
 
     graph.set_entry_point("generator")
@@ -68,7 +72,7 @@ def optimize(
     n_trials: int = 20,
     backend: ModelBackend = ModelBackend.OLLAMA,
     use_rpe: bool = True,
-    target_score: float = 0.70, 
+    target_score: float = 0.70,
     max_iterations: int = 5,
 ) -> Generator[dict, None, None]:
     """
@@ -86,7 +90,7 @@ def optimize(
         task=task,
         backend=backend,
     )
-    
+
     baseline_score_obj = compute_score(
         result=baseline_result,
         task=task,
@@ -107,7 +111,7 @@ def optimize(
 
     initial_state: PromptState = {
         "task": task,
-        "run_id": "",                      # Satisfies the registry tracking
+        "run_id": "",  # Satisfies the registry tracking
         "input_example": input_example,
         "expected_output": expected_output,
         "backend": backend_str,
@@ -115,7 +119,7 @@ def optimize(
         "base_prompt": base_prompt,
         "current_prompt": base_prompt,
         "current_iteration": 0,
-        "current_candidate_ssc": 0.0,      # Satisfies the generator's temporary score
+        "current_candidate_ssc": 0.0,  # Satisfies the generator's temporary score
         "last_feedback": "",
         "target_score": target_score,
         "max_iterations": max_iterations,
@@ -123,8 +127,8 @@ def optimize(
         "n_trials": n_trials,
         "best_prompt": base_prompt,
         "best_reachability": baseline_reachability,
-        "best_ssc": 0.5,               # updated by generator_node after first RPE cycle
-        "logprobs_available": None,    # detected by evaluator_node on first run
+        "best_ssc": 0.5,  # updated by generator_node after first RPE cycle
+        "logprobs_available": None,  # detected by evaluator_node on first run
         "best_score": baseline_score,
         "global_best_prompt": base_prompt,
         "global_best_score": baseline_score,
@@ -139,9 +143,7 @@ def optimize(
     if use_rpe == False:
         final_state = _graph.invoke(initial_state)
 
-        improvement = round(
-            final_state["global_best_score"] - baseline_score, 4
-        )
+        improvement = round(final_state["global_best_score"] - baseline_score, 4)
 
         logger.info(
             f"graph complete "
@@ -173,17 +175,16 @@ def optimize(
 
         for event in _graph.stream(initial_state):
             for node_name, state_update in event.items():
-
                 # a node returns an empty dict (e.g. evaluator finds no new best).
                 # dict.update(None) raises 'NoneType' object is not iterable.
                 if state_update is not None:
                     current_full_state.update(state_update)
-                
+
                 if node_name == "controller":
                     improvement = round(
                         current_full_state["global_best_score"] - baseline_score, 4
                     )
-                    
+
                     logger.info(
                         f"cycle complete "
                         f"iterations={current_full_state.get('current_iteration', 0)} "
@@ -193,20 +194,28 @@ def optimize(
                     )
 
                     # Report best_reachability as the primary progress signal.
-                    best_reach = current_full_state.get("best_reachability", baseline_reachability)
+                    best_reach = current_full_state.get(
+                        "best_reachability", baseline_reachability
+                    )
                     reach_improvement = round(best_reach - baseline_reachability, 4)
 
                     yield {
                         "best_prompt": current_full_state["global_best_prompt"],
-                        "best_score": best_reach,           # reachability as primary score
+                        "best_score": best_reach,  # reachability as primary score
                         "best_reachability": best_reach,
                         "baseline_score": baseline_reachability,  # align baseline to reachability
                         "baseline_reachability": baseline_reachability,
                         "improvement": reach_improvement,
                         "current_iteration": current_full_state["current_iteration"],
-                        "iterations_completed": current_full_state.get("iterations_completed", 0),
-                        "target_reached": current_full_state.get("target_reached", False),
+                        "iterations_completed": current_full_state.get(
+                            "iterations_completed", 0
+                        ),
+                        "target_reached": current_full_state.get(
+                            "target_reached", False
+                        ),
                         "feedback": current_full_state.get("last_feedback", ""),
                         "best_ssc": current_full_state.get("best_ssc", 0.0),
-                        "logprobs_available": current_full_state.get("logprobs_available", True),
+                        "logprobs_available": current_full_state.get(
+                            "logprobs_available", True
+                        ),
                     }

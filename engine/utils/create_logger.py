@@ -20,13 +20,11 @@ def get_logger(name: str) -> logging.Logger:
     if logger.handlers:
         return logger
 
-    logger.setLevel(logging.DEBUG)      # Capture everything
-    logger.propagate = False            # Don't pass logs to root logger
+    logger.setLevel(logging.DEBUG)  # Capture everything
+    logger.propagate = False  # Don't pass logs to root logger
 
     # Common format for both console and file
-    formatter = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s - %(message)s"
-    )
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 
     # Console handler → only show important messages
     console = logging.StreamHandler()
@@ -37,7 +35,7 @@ def get_logger(name: str) -> logging.Logger:
     file = RotatingFileHandler(
         "logs/app.log",
         maxBytes=5 * 1024 * 1024,  # 5 MB per file
-        backupCount=3              # keep last 3 logs
+        backupCount=3,  # keep last 3 logs
     )
     file.setLevel(logging.DEBUG)
     file.setFormatter(formatter)

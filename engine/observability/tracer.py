@@ -1,6 +1,7 @@
 """
 Observability layer, structured logging with trace correlation.
 """
+
 import time
 import json
 from dataclasses import dataclass, asdict
@@ -16,6 +17,7 @@ class EvalTrace:
     Written to the log as structured JSON so it can be
     ingested by any log aggregator (ELK, Loki, CloudWatch).
     """
+
     trace_id: str
     task: str
     backend: str

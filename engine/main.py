@@ -3,6 +3,7 @@ Imprimer engine, gRPC entrypoint.
 
 This is the cognitive layer
 """
+
 import grpc
 from concurrent import futures
 
@@ -24,12 +25,9 @@ logger = get_logger(__name__)
 
 
 class PromptEngineServicer(imprimer_pb2_grpc.PromptEngineServicer):
-
     def EvaluatePrompt(self, request, context):
         logger.info(
-            f"trace={request.trace_id} "
-            f"task={request.task} "
-            f"backend={request.backend}"
+            f"trace={request.trace_id} task={request.task} backend={request.backend}"
         )
 
         # Security gate, scan before any LLM interaction
@@ -70,8 +68,12 @@ class PromptEngineServicer(imprimer_pb2_grpc.PromptEngineServicer):
             backend=backend,
         )
 
-        score_a = score(result_a, request.task, request.input, request.use_judge, backend) # Scorer have optional use_judge
-        score_b = score(result_b, request.task, request.input, request.use_judge, backend)
+        score_a = score(
+            result_a, request.task, request.input, request.use_judge, backend
+        )  # Scorer have optional use_judge
+        score_b = score(
+            result_b, request.task, request.input, request.use_judge, backend
+        )
         winner = "a" if score_a.combined >= score_b.combined else "b"
 
         # reachability gap report
@@ -83,37 +85,41 @@ class PromptEngineServicer(imprimer_pb2_grpc.PromptEngineServicer):
         )
 
         # persist to registry
-        save(EvalRecord(
-            trace_id=request.trace_id,
-            task=request.task,
-            backend=backend_str,
-            variant_a=request.variant_a,
-            variant_b=request.variant_b,
-            winner=winner,
-            reachability_a=score_a.reachability,
-            reachability_b=score_b.reachability,
-            score_a=score_a.combined,
-            score_b=score_b.combined,
-            latency_a_ms=result_a.latency_ms,
-            latency_b_ms=result_b.latency_ms,
-            gap_report=gap_report,
-        ))
+        save(
+            EvalRecord(
+                trace_id=request.trace_id,
+                task=request.task,
+                backend=backend_str,
+                variant_a=request.variant_a,
+                variant_b=request.variant_b,
+                winner=winner,
+                reachability_a=score_a.reachability,
+                reachability_b=score_b.reachability,
+                score_a=score_a.combined,
+                score_b=score_b.combined,
+                latency_a_ms=result_a.latency_ms,
+                latency_b_ms=result_b.latency_ms,
+                gap_report=gap_report,
+            )
+        )
 
         # Structured audit trace
-        log_eval(EvalTrace(
-            trace_id=request.trace_id,
-            task=request.task,
-            backend=backend_str,
-            winner=winner,
-            reachability_a=score_a.reachability,
-            reachability_b=score_b.reachability,
-            score_a=score_a.combined,
-            score_b=score_b.combined,
-            latency_a_ms=result_a.latency_ms,
-            latency_b_ms=result_b.latency_ms,
-            variant_a=request.variant_a,
-            variant_b=request.variant_b,
-        ))
+        log_eval(
+            EvalTrace(
+                trace_id=request.trace_id,
+                task=request.task,
+                backend=backend_str,
+                winner=winner,
+                reachability_a=score_a.reachability,
+                reachability_b=score_b.reachability,
+                score_a=score_a.combined,
+                score_b=score_b.combined,
+                latency_a_ms=result_a.latency_ms,
+                latency_b_ms=result_b.latency_ms,
+                variant_a=request.variant_a,
+                variant_b=request.variant_b,
+            )
+        )
 
         logger.info(
             f"trace={request.trace_id} "
@@ -133,19 +139,16 @@ class PromptEngineServicer(imprimer_pb2_grpc.PromptEngineServicer):
             score_a=score_a.combined,
             score_b=score_b.combined,
         )
-    
+
     def BestVariant(self, request, context):
         logger.info(f"task={request.task} limit={request.limit}")
-        
+
         limit = request.limit if request.limit > 0 else 10
         result = best_variant_for_task(request.task, limit=limit)
 
         if not result:
-            return imprimer_pb2.BestResponse(
-                task=request.task,
-                found=False
-            )
-        
+            return imprimer_pb2.BestResponse(task=request.task, found=False)
+
         return imprimer_pb2.BestResponse(
             task=result["task"],
             best_template=result["best_template"],
@@ -155,7 +158,7 @@ class PromptEngineServicer(imprimer_pb2_grpc.PromptEngineServicer):
             found=True,
         )
 
-    def OptimizePrompt(self, request, context): 
+    def OptimizePrompt(self, request, context):
         logger.info(
             f"optimize task={request.task} "
             f"n_trials={request.n_trials} "
@@ -165,7 +168,7 @@ class PromptEngineServicer(imprimer_pb2_grpc.PromptEngineServicer):
         )
 
         backend_str = request.backend.lower() if request.backend else "ollama"
-        
+
         try:
             backend = ModelBackend(backend_str)
         except ValueError:
@@ -201,7 +204,7 @@ class PromptEngineServicer(imprimer_pb2_grpc.PromptEngineServicer):
             iterations_completed=result["iterations_completed"],
             target_reached=result["target_reached"],
         )
-    
+
     def AnalyzeStability(self, request, context):
         logger.info(
             f"trace={request.trace_id} "
@@ -211,7 +214,7 @@ class PromptEngineServicer(imprimer_pb2_grpc.PromptEngineServicer):
         )
 
         backend_str = request.backend.lower() if request.backend else "ollama"
-        try: 
+        try:
             backend = ModelBackend(backend_str)
         except ValueError:
             backend = ModelBackend.OLLAMA
@@ -248,9 +251,7 @@ class PromptEngineServicer(imprimer_pb2_grpc.PromptEngineServicer):
 def serve():
     init_db()
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
-    imprimer_pb2_grpc.add_PromptEngineServicer_to_server(
-        PromptEngineServicer(), server
-    )
+    imprimer_pb2_grpc.add_PromptEngineServicer_to_server(PromptEngineServicer(), server)
     server.add_insecure_port("[::]:50051")
     server.start()
     logger.info("Imprimer engine listening on :50051")

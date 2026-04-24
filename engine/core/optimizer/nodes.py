@@ -1,4 +1,4 @@
-'''
+"""
 LangGraph node functions for the prompt optimization graph.
 
   generator  : runs Optuna TPE search over one mutation dimension (creative)
@@ -10,14 +10,18 @@ rpe feedback loop:
   describing why the current best prompt works. This is injected into
   the next generator cycle via the PERSONAS slot, the model learns
   from its own prior successes at a semantic level.
-'''
+"""
 
 import uuid
 import os
 import requests
 
 from core.optimizer.state import PromptState
-from core.optimizer.bayesian_search import optimize as bayesian_optimize, PERSONAS, DIMENSION_SEQUENCE
+from core.optimizer.bayesian_search import (
+    optimize as bayesian_optimize,
+    PERSONAS,
+    DIMENSION_SEQUENCE,
+)
 from core.chains.prompt_chain import ModelBackend, run_variant, call_llm
 from core.evaluator.scorer import score as compute_score
 from core.registry.prompt_store import OptimizationTrialRecord, save_optimization_trial
@@ -116,13 +120,15 @@ def generator_node(state: PromptState) -> dict:
         reflection_hints = {}
         if feedback:
             f_lower = feedback.lower()
-            
+
             if "verbose" in f_lower or "too long" in f_lower or "concise" in f_lower:
-                reflection_hints["output_contract"] = "Output only the answer, no preamble."
-            
+                reflection_hints["output_contract"] = (
+                    "Output only the answer, no preamble."
+                )
+
             if "hedge" in f_lower or "uncertain" in f_lower or "confident" in f_lower:
                 reflection_hints["hedging"] = "Be definitive."
-                
+
             if "unprofessional" in f_lower or "expert" in f_lower:
                 reflection_hints["persona"] = "You are an expert in this domain."
 
@@ -137,7 +143,7 @@ def generator_node(state: PromptState) -> dict:
             backend=backend,
             dimension=dimension,
             study_name=f"imprimer_{state['task']}_{dimension}",
-            reflection_hints=hints_to_pass, 
+            reflection_hints=hints_to_pass,
         )
         best_prompt = result.best_prompt
         cycle_history = [{**h, "iteration": iteration} for h in result.history]
@@ -157,8 +163,8 @@ def generator_node(state: PromptState) -> dict:
 def evaluator_node(state: PromptState) -> dict:
     """
     Scores the generator's candidate and generates RPE feedback.
-    
-    Persists every evaluated candidate to the optimization_trials 
+
+    Persists every evaluated candidate to the optimization_trials
     database so the Registry UI functions correctly.
     """
     backend = ModelBackend(state["backend"])
@@ -201,7 +207,9 @@ def evaluator_node(state: PromptState) -> dict:
     # Persist detection result
     if "logprobs_available" not in state or state.get("logprobs_available") is None:
         updates["logprobs_available"] = has_logprobs
-        logger.info(f"evaluator logprobs_available={has_logprobs} (detected on first run)")
+        logger.info(
+            f"evaluator logprobs_available={has_logprobs} (detected on first run)"
+        )
     else:
         has_logprobs = state.get("logprobs_available", has_logprobs)
 
@@ -225,7 +233,7 @@ def evaluator_node(state: PromptState) -> dict:
     run_id = state.get("run_id")
     if not run_id:
         run_id = str(uuid.uuid4())
-        updates["run_id"] = run_id # Save it back to state for the next cycle
+        updates["run_id"] = run_id  # Save it back to state for the next cycle
 
     try:
         record = OptimizationTrialRecord(
@@ -240,24 +248,28 @@ def evaluator_node(state: PromptState) -> dict:
             reachability=reachability,
             similarity=similarity,
             latency_ms=result.latency_ms,
-            is_best=is_new_best
+            is_best=is_new_best,
         )
         save_optimization_trial(record)
-        logger.info(f"Saved trial to registry: run={run_id} iter={iteration} is_best={is_new_best}")
+        logger.info(
+            f"Saved trial to registry: run={run_id} iter={iteration} is_best={is_new_best}"
+        )
     except Exception as e:
         logger.error(f"Failed to save trial to registry: {e}")
 
     # Promotion Logic
     if is_new_best:
-        updates.update({
-            "global_best_prompt": state["current_prompt"],
-            "global_best_score": combined,
-            "global_best_reachability": reachability,
-            "best_prompt": state["current_prompt"],
-            "best_reachability": reachability,
-            "best_score": combined,
-            **({"best_ssc": control_signal} if not has_logprobs else {}),
-        })
+        updates.update(
+            {
+                "global_best_prompt": state["current_prompt"],
+                "global_best_score": combined,
+                "global_best_reachability": reachability,
+                "best_prompt": state["current_prompt"],
+                "best_reachability": reachability,
+                "best_score": combined,
+                **({"best_ssc": control_signal} if not has_logprobs else {}),
+            }
+        )
         logger.info(
             f"evaluator new best ({signal_name}): "
             f"{best_control_signal:.4f} -> {control_signal:.4f} "
@@ -317,15 +329,13 @@ def controller_node(state: PromptState) -> dict:
 def should_continue(state: PromptState) -> str:
     if state["target_reached"]:
         logger.info(
-            f"graph terminating: target score "
-            f"{state['target_score']:.4f} reached"
+            f"graph terminating: target score {state['target_score']:.4f} reached"
         )
         return "end"
 
     if state["current_iteration"] >= state["max_iterations"]:
         logger.info(
-            f"graph terminating: max iterations "
-            f"{state['max_iterations']} reached"
+            f"graph terminating: max iterations {state['max_iterations']} reached"
         )
         return "end"
 

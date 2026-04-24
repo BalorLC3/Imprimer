@@ -1,6 +1,7 @@
-'''
+"""
 Shared state for the LangGraph optimization loop.
-'''
+"""
+
 from typing import TypedDict
 
 
@@ -11,9 +12,9 @@ class PromptState(TypedDict):
     task: str
     input_example: str
     expected_output: str
-    backend: str           # always a string (ModelBackend.value), never the enum
-    base_prompt: str       # immutable anchor, generator always reads this
-    use_rpe: bool          # true: RPE / false: Bayesian search
+    backend: str  # always a string (ModelBackend.value), never the enum
+    base_prompt: str  # immutable anchor, generator always reads this
+    use_rpe: bool  # true: RPE / false: Bayesian search
 
     # Control parameters
     target_score: float
@@ -22,7 +23,7 @@ class PromptState(TypedDict):
     n_variants: int
 
     # Current state
-    current_prompt: str        # decorated candidate for this cycle
+    current_prompt: str  # decorated candidate for this cycle
     current_iteration: int
     current_candidate_ssc: float
 
@@ -33,9 +34,9 @@ class PromptState(TypedDict):
 
     best_prompt: str
     best_reachability: float
-    best_ssc: float            # SSC of the current best; fallback when no logprobs
+    best_ssc: float  # SSC of the current best; fallback when no logprobs
     best_score: float
-    logprobs_available: bool   # set by evaluator on first run, read by all nodes
+    logprobs_available: bool  # set by evaluator on first run, read by all nodes
 
     # Global best by combined score, returned to caller for UI display
     global_best_prompt: str

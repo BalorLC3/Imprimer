@@ -13,9 +13,7 @@ ssl_cert_file = os.environ.get("SSL_CERT_FILE")
 if ssl_cert_file and not os.path.exists(ssl_cert_file):
     del os.environ["SSL_CERT_FILE"]
 
-engine_path = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "engine")
-)
+engine_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "engine"))
 if engine_path not in sys.path:
     sys.path.insert(0, engine_path)
 
@@ -37,10 +35,12 @@ TASK_CATEGORIES = [
     "code_generation",
     "rewrite",
     "roleplay",
-    "qa"
+    "qa",
 ]
 
-BACKEND_ID = ModelBackend.OLLAMA # harcoded backend for dev and demo, change to OLLAMA for local usage
+BACKEND_ID = (
+    ModelBackend.OLLAMA
+)  # harcoded backend for dev and demo, change to OLLAMA for local usage
 BEST_PROMPT = []
 
 
@@ -110,6 +110,7 @@ details.run-item[open] > summary { border-bottom: 1px solid var(--color-border-t
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 """
 
+
 def _render_token_confidence(token_confidence: list) -> str:
     """Renders token-level confidence using the new HTML styles."""
     if not token_confidence:
@@ -123,7 +124,7 @@ def _render_token_confidence(token_confidence: list) -> str:
         b = int(48 if certainty < 0.5 else 117)
         color = f"#{r:02x}{g:02x}{b:02x}"
         bg = f"rgba({r},{g},{b},0.15)"
-        
+
         token = html.escape(tc.get("token", ""))
         logprob = tc.get("logprob", 0)
         html_str += (
@@ -132,6 +133,7 @@ def _render_token_confidence(token_confidence: list) -> str:
         )
     html_str += "</div>"
     return html_str
+
 
 def build_status_bar(text, is_done=False):
     dot_class = "done" if is_done else ""
@@ -142,13 +144,14 @@ def build_status_bar(text, is_done=False):
     </div>
     """
 
+
 def build_metric_html(label, value, delta=None, is_target=False):
     delta_html = ""
     if delta is not None and not is_target:
         cls = "pos" if delta > 0 else "neg"
         sign = "+" if delta > 0 else ""
         delta_html = f'<div class="delta {cls}">{sign}{delta:.3f}</div>'
-    
+
     val_str = f"{value:.3f}" if isinstance(value, float) else str(value)
     return f"""
     <div class="metric">
@@ -160,20 +163,37 @@ def build_metric_html(label, value, delta=None, is_target=False):
 
 
 def run_optimization(
-    prompt, input_text, task, model_id, hf_token,
-    expected_output, n_variants, target_score, max_iterations, use_judge
+    prompt,
+    input_text,
+    task,
+    model_id,
+    hf_token,
+    expected_output,
+    n_variants,
+    target_score,
+    max_iterations,
+    use_judge,
 ):
     global BEST_PROMPT
     if not prompt or not task:
-        yield "<div class='feedback-card'>Prompt, task, and expected output are required.</div>", "", "", "", ""
+        yield (
+            "<div class='feedback-card'>Prompt, task, and expected output are required.</div>",
+            "",
+            "",
+            "",
+            "",
+        )
         return
 
     # Backend environment setup
     if BACKEND_ID == ModelBackend.HUGGINGFACE:
-        if model_id: os.environ["HF_MODEL_ID"] = model_id
-        if hf_token: os.environ["HF_TOKEN"] = hf_token
+        if model_id:
+            os.environ["HF_MODEL_ID"] = model_id
+        if hf_token:
+            os.environ["HF_TOKEN"] = hf_token
     elif BACKEND_ID == ModelBackend.OLLAMA:
-        if model_id: os.environ["OLLAMA_MODEL"] = model_id
+        if model_id:
+            os.environ["OLLAMA_MODEL"] = model_id
 
     # INITIAL UI STATE
     status_html = build_status_bar("Initializing optimization graph...", is_done=False)
@@ -183,14 +203,16 @@ def run_optimization(
         {build_metric_html("Target", target_score)}
         {build_metric_html("Cycles", f"0 / {max_iterations}")}
     </div>"""
-    
+
     prompt_html = f"""<div class="prompt-compare">
         <div class="prompt-box"><div class="box-label">Original</div><div class="text">{html.escape(prompt)}</div></div>
         <div class="prompt-box best"><div class="box-label">Optimized</div><div class="text">⏳ Waiting for first cycle...</div></div>
     </div>"""
-    
+
     timeline_html = "<div class='timeline'><div class='iter-row running'><span class='iter-label'>Cycle 1 <span class='spin'>↻</span></span><div class='bar-wrap'><div class='bar-fill base' style='width:0%'></div></div><span class='score-val'>—</span><span class='score-val'>—</span></div></div>"
-    feedback_html = "<div class='feedback-card'>⏳ Waiting for AI judge reflection...</div>"
+    feedback_html = (
+        "<div class='feedback-card'>⏳ Waiting for AI judge reflection...</div>"
+    )
 
     yield status_html, metrics_html, timeline_html, prompt_html, feedback_html
 
@@ -202,28 +224,35 @@ def run_optimization(
             expected_output=expected_output,
             n_variants=int(n_variants),
             backend=BACKEND_ID,
-            use_judge=False, # deprecated: in further updates this is going to be removed for redundancy
-            use_rpe=True, 
-            target_score=float(target_score), 
+            use_judge=False,  # deprecated: in further updates this is going to be removed for redundancy
+            use_rpe=True,
+            target_score=float(target_score),
             max_iterations=int(max_iterations),
         )
-        
+
         final_result = None
-        
-        if hasattr(optimizer_output, '__iter__') and not isinstance(optimizer_output, dict):
+
+        if hasattr(optimizer_output, "__iter__") and not isinstance(
+            optimizer_output, dict
+        ):
             for step_result in optimizer_output:
                 final_result = step_result
-                iteration = step_result.get('iterations_completed', step_result.get('current_iteration', 1))
-                
-                base_s = step_result.get('baseline_score', 0.0)
-                best_s = step_result.get('best_score', 0.0)
-                improv = step_result.get('improvement', 0.0)
-                curr_p = step_result.get('best_prompt', '')
-                fb_str = step_result.get('feedback', '')
+                iteration = step_result.get(
+                    "iterations_completed", step_result.get("current_iteration", 1)
+                )
+
+                base_s = step_result.get("baseline_score", 0.0)
+                best_s = step_result.get("best_score", 0.0)
+                improv = step_result.get("improvement", 0.0)
+                curr_p = step_result.get("best_prompt", "")
+                fb_str = step_result.get("feedback", "")
                 BEST_PROMPT.append(curr_p)
 
                 # Status & Metrics
-                status_html = build_status_bar(f"Cycle {iteration} of {max_iterations} — evaluating variants...", is_done=False)
+                status_html = build_status_bar(
+                    f"Cycle {iteration} of {max_iterations} — evaluating variants...",
+                    is_done=False,
+                )
                 metrics_html = f"""<div class="metric-row">
                     {build_metric_html("Baseline", base_s)}
                     {build_metric_html("Best so far", best_s, delta=improv)}
@@ -238,13 +267,13 @@ def run_optimization(
                         # Completed steps (We mock the history visualization strictly based on current progress)
                         tl += f"""<div class="iter-row done">
                             <span class="iter-label">Cycle {i}</span>
-                            <div class="bar-wrap"><div class="bar-fill base" style="width:{min(100, (best_s/1.0)*100)}%"></div></div>
+                            <div class="bar-wrap"><div class="bar-fill base" style="width:{min(100, (best_s / 1.0) * 100)}%"></div></div>
                             <span class="score-val">{best_s:.3f}</span><span class="score-val improved">+{improv:.3f}</span>
                         </div>"""
                     elif i == iteration:
                         tl += f"""<div class="iter-row running">
                             <span class="iter-label">Cycle {i} <span class='spin'>↻</span></span>
-                            <div class='bar-wrap'><div class='bar-fill' style='width:{min(100, (best_s/1.0)*100)}%'></div></div>
+                            <div class='bar-wrap'><div class='bar-fill' style='width:{min(100, (best_s / 1.0) * 100)}%'></div></div>
                             <span class='score-val improved'>{best_s:.3f}</span><span class='score-val improved'>+{improv:.3f}</span>
                         </div>"""
                     else:
@@ -253,36 +282,42 @@ def run_optimization(
                             <div class="bar-wrap"><div class="bar-fill" style="width:0%"></div></div>
                             <span class="score-val">—</span><span class="score-val">—</span>
                         </div>"""
-                tl += '</div>'
+                tl += "</div>"
 
                 # Prompts & Feedback
                 prompt_html = f"""<div class="prompt-compare">
                     <div class="prompt-box"><div class="box-label">Original</div><div class="text">{html.escape(prompt)}</div></div>
                     <div class="prompt-box best"><div class="box-label">Best so far (Cycle {iteration})</div><div class="text">{html.escape(curr_p)}</div></div>
                 </div>"""
-                
+
                 feedback_html = f"""<div class="feedback-card">
-                    <div class="fb-label">Cycle {iteration-1 if fb_str else iteration} Reflection</div>
+                    <div class="fb-label">Cycle {iteration - 1 if fb_str else iteration} Reflection</div>
                     {html.escape(fb_str) if fb_str else "Generating new variations and scoring..."}
                 </div>"""
 
                 yield status_html, metrics_html, tl, prompt_html, feedback_html
         else:
             final_result = optimizer_output
-            BEST_PROMPT.append(final_result.get('best_prompt', ''))
-            
+            BEST_PROMPT.append(final_result.get("best_prompt", ""))
+
     except Exception as e:
         err = f"<div class='feedback-card' style='border-color:red;'><div class='fb-label' style='color:red;'>Error</div>{html.escape(str(e))}</div>"
         yield build_status_bar("Optimization failed", True), "", "", "", err
         return
 
     result = final_result or {}
-    status_msg = "Target score reached — optimization complete" if result.get("target_reached") else "Iteration cap reached — optimization finished"
-    final_iteration = result.get('iterations_completed', result.get('current_iteration', max_iterations))
-    
-    base_s = result.get('baseline_score', 0.0)
-    best_s = result.get('best_score', 0.0)
-    improv = result.get('improvement', 0.0)
+    status_msg = (
+        "Target score reached — optimization complete"
+        if result.get("target_reached")
+        else "Iteration cap reached — optimization finished"
+    )
+    final_iteration = result.get(
+        "iterations_completed", result.get("current_iteration", max_iterations)
+    )
+
+    base_s = result.get("baseline_score", 0.0)
+    best_s = result.get("best_score", 0.0)
+    improv = result.get("improvement", 0.0)
 
     status_html = build_status_bar(status_msg, is_done=True)
     metrics_html = f"""<div class="metric-row">
@@ -296,17 +331,17 @@ def run_optimization(
     for i in range(1, int(final_iteration) + 1):
         tl += f"""<div class="iter-row done">
             <span class="iter-label">Cycle {i}</span>
-            <div class="bar-wrap"><div class="bar-fill" style="width:{min(100, (best_s/1.0)*100)}%"></div></div>
+            <div class="bar-wrap"><div class="bar-fill" style="width:{min(100, (best_s / 1.0) * 100)}%"></div></div>
             <span class="score-val">{best_s:.3f}</span><span class="score-val improved">+{improv:.3f}</span>
         </div>"""
-    tl += '</div>'
+    tl += "</div>"
 
     prompt_html = f"""<div class="prompt-compare">
         <div class="prompt-box"><div class="box-label">Original</div><div class="text">{html.escape(prompt)}</div></div>
-        <div class="prompt-box best"><div class="box-label">Final Optimized Prompt</div><div class="text">{html.escape(result.get('best_prompt', ''))}</div></div>
+        <div class="prompt-box best"><div class="box-label">Final Optimized Prompt</div><div class="text">{html.escape(result.get("best_prompt", ""))}</div></div>
     </div>"""
 
-    fb = result.get('feedback', '')
+    fb = result.get("feedback", "")
     feedback_html = f"""<div class="feedback-card">
         <div class="fb-label">Final Output Reflection</div>
         {html.escape(fb) if fb else "Target reached or maximum iterations exhausted."}
@@ -318,10 +353,19 @@ def run_optimization(
 def run_analysis(prompt, input_text, task, model_id, hf_token, n_runs, temperature):
 
     if not prompt or not task:
-        return "<div class='feedback-card'>Prompt and task are required.</div>", "", "", "", None, None
+        return (
+            "<div class='feedback-card'>Prompt and task are required.</div>",
+            "",
+            "",
+            "",
+            None,
+            None,
+        )
 
-    if model_id: os.environ["HF_MODEL_ID"] = model_id
-    if hf_token: os.environ["HF_TOKEN"] = hf_token
+    if model_id:
+        os.environ["HF_MODEL_ID"] = model_id
+    if hf_token:
+        os.environ["HF_TOKEN"] = hf_token
 
     try:
         result = run_stability(
@@ -349,7 +393,7 @@ def run_analysis(prompt, input_text, task, model_id, hf_token, n_runs, temperatu
     </div>
     <div class="feedback-card" style="margin-top: 1rem;">
         <div class="fb-label">Analysis Recommendation</div>
-        {html.escape(getattr(result, 'recommendation', 'No recommendation provided.'))}
+        {html.escape(getattr(result, "recommendation", "No recommendation provided."))}
     </div>
     """
 
@@ -361,17 +405,19 @@ def run_analysis(prompt, input_text, task, model_id, hf_token, n_runs, temperatu
         <details class="run-item" {open_attr}>
             <summary class="run-header">
                 <div class="dot done"></div>
-                <span>Run {i+1}</span>
+                <span>Run {i + 1}</span>
             </summary>
             <div class="run-body">{html.escape(out)}</div>
         </details>
         """
-    outputs_html += '</div>'
+    outputs_html += "</div>"
 
-    token_html = _render_token_confidence([
-        {"token": tc.token, "certainty": tc.certainty, "logprob": tc.logprob}
-        for tc in result.token_confidence
-    ])
+    token_html = _render_token_confidence(
+        [
+            {"token": tc.token, "certainty": tc.certainty, "logprob": tc.logprob}
+            for tc in result.token_confidence
+        ]
+    )
 
     return status_html, metrics_html, outputs_html, token_html, result, None
 
@@ -383,12 +429,12 @@ def query_best(task, limit):
         result = best_variant_for_task(task, limit=int(limit))
         if not result.get("task"):
             return f"No evaluations found for task '{task}'."
-        
-        return f"""**Task:** {result['task']}
-**Evaluations sampled:** {result['evaluations_sampled']}
-**Avg score:** {result['avg_score']:.4f}
 
-**Best prompt:** {result['best_template']}
+        return f"""**Task:** {result["task"]}
+**Evaluations sampled:** {result["evaluations_sampled"]}
+**Avg score:** {result["avg_score"]:.4f}
+
+**Best prompt:** {result["best_template"]}
 """
     except Exception as e:
         return str(e)
@@ -401,7 +447,6 @@ HF_FREE_MODELS = [
 ]
 
 with gr.Blocks(title="Imprimer - LLM Prompt Control") as demo:
-
     gr.Markdown("""
 # Imprimer - LLM Prompt Control Platform
 
@@ -422,14 +467,14 @@ with gr.Blocks(title="Imprimer - LLM Prompt Control") as demo:
                 placeholder="The text your prompt will process...",
                 lines=3,
             )
-            
+
             task_input = gr.Dropdown(
                 label="Task type",
                 choices=TASK_CATEGORIES,
                 value="summarize",
                 allow_custom_value=True,
             )
-            
+
             with gr.Row():
                 try:
                     if BACKEND_ID == ModelBackend.HUGGINGFACE:
@@ -443,16 +488,16 @@ with gr.Blocks(title="Imprimer - LLM Prompt Control") as demo:
                         model_id = gr.Dropdown(
                             label="Ollama Model",
                             choices=[
-                                "llama3.2",                
-                                "qwen2.5:0.5b",                          
-                                "qwen2.5:1.5b",                        
+                                "llama3.2",
+                                "qwen2.5:0.5b",
+                                "qwen2.5:1.5b",
                             ],
                             value="qwen2.5:1.5b",
                             allow_custom_value=True,
                         )
                 except Exception as e:
                     raise f"No backend supported {e}"
-                
+
                 hf_token = gr.Textbox(
                     label="HF Token",
                     placeholder="hf_...",
@@ -462,36 +507,52 @@ with gr.Blocks(title="Imprimer - LLM Prompt Control") as demo:
     gr.Markdown("---")
 
     with gr.Tabs():
-
-        # Tab 1: Analysis 
+        # Tab 1: Analysis
         with gr.TabItem("🔬 Stability Analysis"):
             with gr.Row():
-                n_runs = gr.Slider(minimum=2, maximum=5, value=3, step=1, label="Number of runs (N samples)")
-                temperature = gr.Slider(minimum=0.1, maximum=1.5, value=0.7, step=0.1, label="Temperature")
+                n_runs = gr.Slider(
+                    minimum=2,
+                    maximum=5,
+                    value=3,
+                    step=1,
+                    label="Number of runs (N samples)",
+                )
+                temperature = gr.Slider(
+                    minimum=0.1, maximum=1.5, value=0.7, step=0.1, label="Temperature"
+                )
 
             analyze_btn = gr.Button("🔬 Analyze Prompt", variant="primary")
-            
+
             # Using gr.HTML blocks mapped to the HTML UI layout
             stab_status_out = gr.HTML()
             stab_metrics_out = gr.HTML()
-            
+
             gr.HTML('<div class="section-label">Outputs — Expand to read</div>')
             stab_outputs_out = gr.HTML()
-            
+
             gr.HTML('<div class="section-label">Token confidence — First output</div>')
             stab_token_out = gr.HTML()
-            
+
             _analysis_state = gr.State()
 
             analyze_btn.click(
                 fn=run_analysis,
                 inputs=[
-                    prompt_input, input_text, task_input,
-                    model_id, hf_token, n_runs, temperature
+                    prompt_input,
+                    input_text,
+                    task_input,
+                    model_id,
+                    hf_token,
+                    n_runs,
+                    temperature,
                 ],
                 outputs=[
-                    stab_status_out, stab_metrics_out, stab_outputs_out,
-                    stab_token_out, _analysis_state, gr.Textbox(visible=False)
+                    stab_status_out,
+                    stab_metrics_out,
+                    stab_outputs_out,
+                    stab_token_out,
+                    _analysis_state,
+                    gr.Textbox(visible=False),
                 ],
             )
 
@@ -508,18 +569,32 @@ Run Reflective Prompt Optimization inside a LangGraph control loop. The LLM gene
                 )
 
             with gr.Row():
-                n_variants = gr.Slider(minimum=2, maximum=5, value=3, step=1, label="Variants per iteration")
-                target_score= gr.Slider(minimum=0.5, maximum=0.97, value=0.70, step=0.01, label="Target score")
-                max_iter = gr.Slider(minimum=2, maximum=10, value=3, step=1, label="Max graph iterations")
+                n_variants = gr.Slider(
+                    minimum=2,
+                    maximum=5,
+                    value=3,
+                    step=1,
+                    label="Variants per iteration",
+                )
+                target_score = gr.Slider(
+                    minimum=0.5,
+                    maximum=0.97,
+                    value=0.70,
+                    step=0.01,
+                    label="Target score",
+                )
+                max_iter = gr.Slider(
+                    minimum=2, maximum=10, value=3, step=1, label="Max graph iterations"
+                )
 
             optimize_btn = gr.Button("⚡ Optimize Prompt", variant="primary")
 
             # Mapped exactly to the HTML layout structure
             opt_status_out = gr.HTML()
-            
+
             gr.HTML('<div class="section-label">Score progress</div>')
             opt_metrics_out = gr.HTML()
-            
+
             gr.HTML('<div class="section-label">Iteration timeline</div>')
             opt_timeline_out = gr.HTML()
 
@@ -532,15 +607,27 @@ Run Reflective Prompt Optimization inside a LangGraph control loop. The LLM gene
             optimize_btn.click(
                 fn=run_optimization,
                 inputs=[
-                    prompt_input, input_text, task_input, model_id, hf_token,
-                    expected_output, n_variants, target_score, max_iter, gr.State(False)
+                    prompt_input,
+                    input_text,
+                    task_input,
+                    model_id,
+                    hf_token,
+                    expected_output,
+                    n_variants,
+                    target_score,
+                    max_iter,
+                    gr.State(False),
                 ],
                 outputs=[
-                    opt_status_out, opt_metrics_out, opt_timeline_out, opt_prompt_out, opt_feedback_out
+                    opt_status_out,
+                    opt_metrics_out,
+                    opt_timeline_out,
+                    opt_prompt_out,
+                    opt_feedback_out,
                 ],
             )
 
-        # Tab 3: Registry 
+        # Tab 3: Registry
         with gr.TabItem("📚 Registry"):
             gr.Markdown("""
 Query the registry for the best known prompt for a given task,
@@ -553,7 +640,13 @@ based on the **average historical score** across all evaluations.
                     value="summarize",
                     allow_custom_value=True,
                 )
-                registry_limit = gr.Slider(minimum=1, maximum=50, value=10, step=1, label="Evaluations to sample")
+                registry_limit = gr.Slider(
+                    minimum=1,
+                    maximum=50,
+                    value=10,
+                    step=1,
+                    label="Evaluations to sample",
+                )
 
             registry_btn = gr.Button("📚 Query Registry", variant="secondary")
             registry_out = gr.Markdown()
@@ -570,11 +663,8 @@ based on the **average historical score** across all evaluations.
 """)
 
 if __name__ == "__main__":
-    init_db()  
-    
+    init_db()
+
     demo.launch(
-        server_name="0.0.0.0", 
-        server_port=7860,
-        theme=gr.themes.Soft(),
-        css=CUSTOM_CSS
+        server_name="0.0.0.0", server_port=7860, theme=gr.themes.Soft(), css=CUSTOM_CSS
     )

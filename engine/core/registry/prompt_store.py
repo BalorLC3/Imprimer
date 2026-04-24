@@ -6,9 +6,10 @@ over time. A prompt that consistently scores high reachability
 is a well-controlled prompt - the registry makes that visible.
 
 Storage: SQLite for the MVP, zero infrastructure, file-based,
-inspectable with any SQLite viewer. We may swap for Postgres in 
+inspectable with any SQLite viewer. We may swap for Postgres in
 production by changing _get_conn() only. Nothing else changes.
 """
+
 import sqlite3
 import time
 import json
@@ -115,7 +116,8 @@ def save(record: EvalRecord) -> int:
     """
     created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     with _get_conn() as conn:
-        cursor = conn.execute("""
+        cursor = conn.execute(
+            """
             INSERT INTO evaluations (
                 trace_id, task, backend,
                 variant_a, variant_b, winner,
@@ -124,14 +126,24 @@ def save(record: EvalRecord) -> int:
                 latency_a_ms, latency_b_ms,
                 gap_report, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            record.trace_id, record.task, record.backend,
-            record.variant_a, record.variant_b, record.winner,
-            record.reachability_a, record.reachability_b,
-            record.score_a, record.score_b,
-            record.latency_a_ms, record.latency_b_ms,
-            record.gap_report, created_at,
-        ))
+        """,
+            (
+                record.trace_id,
+                record.task,
+                record.backend,
+                record.variant_a,
+                record.variant_b,
+                record.winner,
+                record.reachability_a,
+                record.reachability_b,
+                record.score_a,
+                record.score_b,
+                record.latency_a_ms,
+                record.latency_b_ms,
+                record.gap_report,
+                created_at,
+            ),
+        )
         row_id = cursor.lastrowid
 
     logger.info(
@@ -167,7 +179,8 @@ def save_optimization_trial(record: OptimizationTrialRecord) -> int:
     """
     created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     with _get_conn() as conn:
-        cursor = conn.execute("""
+        cursor = conn.execute(
+            """
             INSERT INTO optimization_trials (
                 run_id, task, backend,
                 base_prompt, candidate_prompt, mutation,
@@ -175,30 +188,44 @@ def save_optimization_trial(record: OptimizationTrialRecord) -> int:
                 similarity, latency_ms, is_best,
                 created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            record.run_id, record.task, record.backend,
-            record.base_prompt, record.candidate_prompt, record.mutation,
-            record.trial_number, record.score, record.reachability,
-            record.similarity, record.latency_ms,
-            int(record.is_best), created_at,
-        ))
+        """,
+            (
+                record.run_id,
+                record.task,
+                record.backend,
+                record.base_prompt,
+                record.candidate_prompt,
+                record.mutation,
+                record.trial_number,
+                record.score,
+                record.reachability,
+                record.similarity,
+                record.latency_ms,
+                int(record.is_best),
+                created_at,
+            ),
+        )
         return cursor.lastrowid
 
 
 def mark_best_optimization_trial(run_id: str, trial_number: int) -> None:
     """Marks the chosen best trial in the optimizer run."""
     with _get_conn() as conn:
-        conn.execute("""
+        conn.execute(
+            """
             UPDATE optimization_trials
             SET is_best = 1
             WHERE run_id = ? AND trial_number = ?
-        """, (run_id, trial_number))
+        """,
+            (run_id, trial_number),
+        )
 
 
 def best_variant_for_task(task: str, limit: int = 10) -> dict:
     with _get_conn() as conn:
         # First, check the optimization_trials table (where RPE runs are saved)
-        row = conn.execute("""
+        row = conn.execute(
+            """
             SELECT
                 candidate_prompt AS best_template,
                 AVG(score) AS avg_score,
@@ -209,11 +236,14 @@ def best_variant_for_task(task: str, limit: int = 10) -> dict:
             GROUP BY candidate_prompt
             ORDER BY avg_score DESC
             LIMIT 1
-        """, (task,)).fetchone()
+        """,
+            (task,),
+        ).fetchone()
 
         # Fallback to the evaluations table (A/B comparisons) if no RPE data exists
         if not row:
-            row = conn.execute("""
+            row = conn.execute(
+                """
                 SELECT
                     CASE WHEN winner = 'a' THEN variant_a ELSE variant_b END AS best_template,
                     COALESCE(AVG(CASE WHEN winner = 'a' THEN score_a ELSE score_b END), 0.0) AS avg_score,
@@ -224,7 +254,9 @@ def best_variant_for_task(task: str, limit: int = 10) -> dict:
                 GROUP BY best_template
                 ORDER BY avg_score DESC
                 LIMIT 1
-            """, (task,)).fetchone()
+            """,
+                (task,),
+            ).fetchone()
 
     if not row:
         return {}

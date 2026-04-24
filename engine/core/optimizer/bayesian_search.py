@@ -1,4 +1,4 @@
-'''
+"""
 Bayesian search via Optuna + spaCy structured mutation engine.
 
 Optuna's Tree-structured Parzen Estimator (TPE) is a Bayesian optimization
@@ -21,7 +21,8 @@ Mutation engine:
      - VerbMutator     : rewrites the root verb (what the model is asked to do)
      - NounMutator     : rewrites the primary object noun chunk (what it acts on)
      - ModalityMutator : shifts surface mood (imperative / directive / interrogative)
-'''
+"""
+
 import re
 import optuna
 import uuid
@@ -49,13 +50,14 @@ try:
 except OSError:
     logger.info("Downloading spaCy 'en_core_web_sm' model...")
     from spacy.cli import download
+
     download("en_core_web_sm")
     _nlp = spacy.load("en_core_web_sm")
 
 
-
 # Literal type for the dimension parameter
 Dimension = Literal["verb", "noun", "modality"]
+
 
 # Structured Mutation Engine
 class VerbMutator:
@@ -70,15 +72,14 @@ class VerbMutator:
     # (match_lemmas, replacement_text)
     # Empty match_lemmas means the strategy applies to any root verb.
     _STRATEGIES: dict[str, tuple[set[str], str]] = {
-        "none":       (set(),            ""),
-        "extract":    ({"summarize"},    "Extract the core idea from"),
-        "distill":    ({"summarize"},    "Distill the main point of"),
-        "condense":   ({"summarize"},    "Condense"),
-        "breakdown":  ({"explain"},      "Break down"),
-        "clarify":    ({"explain"},      "Clearly explain"),
-        "articulate": ({"describe"},     "Articulate"),
-        "outline":    ({"describe",
-                        "explain"},      "Outline"),
+        "none": (set(), ""),
+        "extract": ({"summarize"}, "Extract the core idea from"),
+        "distill": ({"summarize"}, "Distill the main point of"),
+        "condense": ({"summarize"}, "Condense"),
+        "breakdown": ({"explain"}, "Break down"),
+        "clarify": ({"explain"}, "Clearly explain"),
+        "articulate": ({"describe"}, "Articulate"),
+        "outline": ({"describe", "explain"}, "Outline"),
     }
 
     # If mutation produces a prompt shorter than this fraction of the
@@ -86,13 +87,13 @@ class VerbMutator:
     _MIN_LENGTH_RATIO = 0.5
 
     def __init__(self, base_prompt: str):
-        self._base  = base_prompt
-        self._doc   = _nlp(base_prompt)
+        self._base = base_prompt
+        self._doc = _nlp(base_prompt)
         self._roots = [tok for tok in self._doc if tok.dep_ == "ROOT"]
         self._applicable = self._resolve_applicable()
 
     def _resolve_applicable(self) -> dict[str, str]:
-        applicable  = {"none": self._base}
+        applicable = {"none": self._base}
         root_lemmas = {r.lemma_.lower() for r in self._roots}
 
         for key, (match_lemmas, replacement) in self._STRATEGIES.items():
@@ -112,7 +113,7 @@ class VerbMutator:
         if not self._roots or not replacement:
             return self._base
 
-        root   = self._roots[0]
+        root = self._roots[0]
         result = []
         replaced = False
 
@@ -124,7 +125,7 @@ class VerbMutator:
                 result.append(tok.text_with_ws)
 
         first_sent = "".join(result).strip()
-        suffix     = str(self._doc)[root.sent.end_char:]
+        suffix = str(self._doc)[root.sent.end_char :]
         return (first_sent + suffix).strip()
 
     @property
@@ -144,22 +145,22 @@ class NounMutator:
     _REWRITES: dict[str, dict[str, str]] = {
         "determiner": {
             "the": "this",
-            "a":   "the given",
-            "an":  "the following",
+            "a": "the given",
+            "an": "the following",
         },
         "noun": {
-            "document":  "text",
-            "article":   "passage",
+            "document": "text",
+            "article": "passage",
             "paragraph": "excerpt",
-            "text":      "content",
-            "concept":   "idea",
-            "topic":     "subject",
+            "text": "content",
+            "concept": "idea",
+            "topic": "subject",
         },
     }
 
     def __init__(self, base_prompt: str):
-        self._base       = base_prompt
-        self._doc        = _nlp(base_prompt)
+        self._base = base_prompt
+        self._doc = _nlp(base_prompt)
         self._candidates = self._build_candidates()
 
     def _build_candidates(self) -> dict[str, str]:
@@ -171,10 +172,14 @@ class NounMutator:
             for tok in chunk:
                 if tok.dep_ == "det" and tok.lower_ in self._REWRITES["determiner"]:
                     new = self._REWRITES["determiner"][tok.lower_]
-                    candidates[f"det:{tok.lower_}->{new}"] = self._replace_token(tok, new)
+                    candidates[f"det:{tok.lower_}->{new}"] = self._replace_token(
+                        tok, new
+                    )
                 if tok.pos_ == "NOUN" and tok.lower_ in self._REWRITES["noun"]:
                     new = self._REWRITES["noun"][tok.lower_]
-                    candidates[f"noun:{tok.lower_}->{new}"] = self._replace_token(tok, new)
+                    candidates[f"noun:{tok.lower_}->{new}"] = self._replace_token(
+                        tok, new
+                    )
 
         return candidates
 
@@ -193,20 +198,20 @@ class NounMutator:
 class ModalityMutator:
     """
     Shifts the surface mood of the instruction without changing its intent.
-    Example: 
+    Example:
     imperative   : "Summarize the document."
     directive    : "Your task is to summarize the document."
     interrogative: "Could you summarize the document."
     """
 
     def __init__(self, base_prompt: str):
-        self._base       = base_prompt
+        self._base = base_prompt
         self._candidates = self._build_candidates()
 
     def _build_candidates(self) -> dict[str, str]:
         candidates = {"none": self._base}
 
-        doc   = _nlp(self._base)
+        doc = _nlp(self._base)
         roots = [tok for tok in doc if tok.dep_ == "ROOT"]
         if not roots:
             return candidates
@@ -220,7 +225,7 @@ class ModalityMutator:
 
         # directive and interrogative: reframe the opening
         for key, prefix in (
-            ("directive",     f"Your task is to {verb.lower()}"),
+            ("directive", f"Your task is to {verb.lower()}"),
             ("interrogative", f"Could you {verb.lower()}"),
         ):
             rewritten = re.sub(
@@ -241,8 +246,9 @@ class ModalityMutator:
     def apply(self, key: str) -> str:
         return self._candidates.get(key, self._base)
 
+
 # Static combinatorial search space
-# Semantic signal that spaCy cannot generate 
+# Semantic signal that spaCy cannot generate
 PERSONAS = [
     "",
     "You are an expert in this domain.",
@@ -298,7 +304,7 @@ def build_prompt(
     formatting with no hidden branching logic.
     """
     constraint_parts = [c for c in (priming, output_contract, hedging) if c]
-    constraints   = "\n".join(constraint_parts)
+    constraints = "\n".join(constraint_parts)
     persona_block = (persona + "\n") if persona else ""
 
     return skeleton.format(
@@ -330,7 +336,7 @@ def optimize(
     storage: str | None = None,
     study_name: str | None = None,
     dimension: Dimension = "verb",
-    reflection_hints: dict | None = None,  
+    reflection_hints: dict | None = None,
 ) -> OptimizationResult:
     """
     Runs Bayesian optimization (TPE) over one mutation dimension at a time.
@@ -341,28 +347,26 @@ def optimize(
         )
 
     history = []
-    run_id  = uuid.uuid4().hex
-    local_cache = {} # Initialize cache for this optimization run
+    run_id = uuid.uuid4().hex
+    local_cache = {}  # Initialize cache for this optimization run
 
-    # Build all three mutators once 
-    verb_mutator     = VerbMutator(base_prompt)
-    noun_mutator     = NounMutator(base_prompt)
+    # Build all three mutators once
+    verb_mutator = VerbMutator(base_prompt)
+    noun_mutator = NounMutator(base_prompt)
     modality_mutator = ModalityMutator(base_prompt)
 
     # Select the one mutator that is active for this dimension
     active_mutator: VerbMutator | NounMutator | ModalityMutator = {
-        "verb":     verb_mutator,
-        "noun":     noun_mutator,
+        "verb": verb_mutator,
+        "noun": noun_mutator,
         "modality": modality_mutator,
     }[dimension]
 
     logger.info(
-        f"dimension={dimension} "
-        f"active_keys={active_mutator.keys} "
-        f"n_trials={n_trials}"
+        f"dimension={dimension} active_keys={active_mutator.keys} n_trials={n_trials}"
     )
 
-    baseline_result    = run_variant( 
+    baseline_result = run_variant(
         template=base_prompt,
         input_text=input_example,
         task=task,
@@ -383,11 +387,11 @@ def optimize(
 
     def objective(trial: optuna.Trial) -> float:
         # Static slots
-        persona         = trial.suggest_categorical("persona",         PERSONAS)
-        priming         = trial.suggest_categorical("priming",         PRIMING)
+        persona = trial.suggest_categorical("persona", PERSONAS)
+        priming = trial.suggest_categorical("priming", PRIMING)
         output_contract = trial.suggest_categorical("output_contract", OUTPUT_CONTRACTS)
-        hedging         = trial.suggest_categorical("hedging",         HEDGING_SUPPRESSION)
-        skeleton        = trial.suggest_categorical("skeleton",        SKELETONS)
+        hedging = trial.suggest_categorical("hedging", HEDGING_SUPPRESSION)
+        skeleton = trial.suggest_categorical("skeleton", SKELETONS)
 
         # Active mutation dimension only.
         mutation_key = trial.suggest_categorical(
@@ -412,25 +416,31 @@ def optimize(
         )
 
         cache_key_string = f"{backend.value}|{candidate}"
-        key = hashlib.sha256(cache_key_string.encode('utf-8')).hexdigest()
+        key = hashlib.sha256(cache_key_string.encode("utf-8")).hexdigest()
 
         if key in local_cache:
             # Cache Hit
-            cached_data  = local_cache[key]
-            combined     = cached_data["combined"]
-            sim          = cached_data["similarity"]
+            cached_data = local_cache[key]
+            combined = cached_data["combined"]
+            sim = cached_data["similarity"]
             reachability = cached_data["reachability"]
-            latency_ms   = cached_data["latency_ms"]
+            latency_ms = cached_data["latency_ms"]
         else:
             # Cache Miss: Run evaluation
-            result  = run_variant(
+            result = run_variant(
                 template=candidate,
                 input_text=input_example,
                 task=task,
                 backend=backend,
             )
-            s   = compute_score(result=result, baseline_result=baseline_result, task=task, input_text=input_example, expected_output=expected_output)
-            
+            s = compute_score(
+                result=result,
+                baseline_result=baseline_result,
+                task=task,
+                input_text=input_example,
+                expected_output=expected_output,
+            )
+
             sim = s.similarity
             combined = s.combined
             reachability = s.reachability
@@ -441,25 +451,27 @@ def optimize(
                 "combined": combined,
                 "similarity": sim,
                 "reachability": reachability,
-                "latency_ms": latency_ms
+                "latency_ms": latency_ms,
             }
 
         # optuna and db recording
-        trial.set_user_attr("prompt",       candidate)
+        trial.set_user_attr("prompt", candidate)
         trial.set_user_attr("reachability", reachability)
-        trial.set_user_attr("similarity",   sim)
-        trial.set_user_attr("latency_ms",   latency_ms)
+        trial.set_user_attr("similarity", sim)
+        trial.set_user_attr("latency_ms", latency_ms)
         trial.set_user_attr("mutation_key", mut_label)
 
-        history.append({
-            "trial":        trial.number,
-            "mutation":     mut_label,
-            "prompt":       candidate,
-            "score":        combined,
-            "reachability": reachability,
-            "similarity":   sim,
-            "latency_ms":   latency_ms,
-        })
+        history.append(
+            {
+                "trial": trial.number,
+                "mutation": mut_label,
+                "prompt": candidate,
+                "score": combined,
+                "reachability": reachability,
+                "similarity": sim,
+                "latency_ms": latency_ms,
+            }
+        )
 
         save_optimization_trial(
             record=OptimizationTrialRecord(
@@ -495,7 +507,7 @@ def optimize(
         sampler=optuna.samplers.TPESampler(
             n_startup_trials=12,
             multivariate=True,
-            gamma=0.25, # 25% of trials will explore wider search spaces to prevent plateaus
+            gamma=0.25,  # 25% of trials will explore wider search spaces to prevent plateaus
             seed=17,
         ),
         # Removed Pruner here since you evaluate in single-shot (no batches/steps)
@@ -512,8 +524,8 @@ def optimize(
     study.optimize(objective, n_trials=n_trials)
 
     # Result
-    best_trial        = study.best_trial
-    best_prompt       = best_trial.user_attrs.get("prompt",       base_prompt)
+    best_trial = study.best_trial
+    best_prompt = best_trial.user_attrs.get("prompt", base_prompt)
     best_reachability = best_trial.user_attrs.get("reachability", 0.0)
     best_mutation_key = best_trial.user_attrs.get("mutation_key", "unknown")
 
