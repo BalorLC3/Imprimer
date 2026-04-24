@@ -463,7 +463,7 @@ with gr.Blocks(title="Imprimer - LLM Prompt Control") as demo:
                 lines=3,
             )
             input_text = gr.Textbox(
-                label="Input text",
+                label="Input text (optional)",
                 placeholder="The text your prompt will process...",
                 lines=3,
             )
