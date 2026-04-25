@@ -22,9 +22,9 @@
 
 Most prompt engineering is trial and error. Imprimer treats it as a **control problem**: given two prompt variants, which gives you more control over the model's output distribution?
 
-It measures this with a **Reachability Index** grounded in *"What's the Magic Word? A Control Theory of LLM Prompting"* (Bhargava et al., 2023)—the first rigorous analysis of prompt controllability over autoregressive models. Every evaluation is persisted; the system learns which prompts control each task most effectively, surfaced via `best` command and `/best` endpoint.
+It measures this with a **Reachability Index** grounded in *"What's the Magic Word? A Control Theory of LLM Prompting"* (Bhargava et al., 2023)—the first rigorous analysis of prompt controllability over autoregressive models. Every evaluation is persisted; the system learns which prompts control each task most effectively, surfaced via the `best` command and `/best` endpoint.
 
-**Demo:** [imprimer](https://balor78-imprimer.hf.space/) (Reflective Prompt Evolution). For heavy use, run locally: `python -m demo.app` or use the CLI.
+**Run locally:** `python -m demo.app` or use the CLI.
 
 
 
@@ -38,7 +38,7 @@ For each generated token with logprob $\ell$, a soft reachability score via sigm
 
 $$r = \sigma\big(\alpha (\ell - \tau)\big)$$
 
-- $\tau = \log(0.1)$ → token needs ≥10% probability to be naturally reachable
+- $\tau = \log(0.40)$ → token needs ≥40% probability to be naturally reachable
 - $\alpha$ → sharpness of reachable/unreachable separation
 
 $r \approx 1$: token in high-probability region. $r \approx 0$: prompt is fighting the model.
@@ -54,9 +54,17 @@ $$R = \frac{1}{T} \sum_{t=1}^{T} r_t$$
 | `~0.3–0.5` | Partial control, fighting the model |
 | `<0.3` | Largely unnatural output |
 
+### GRPO reward shaping (ELPR)
+
+Rather than optimizing reachability directly with a binary pass/fail threshold, the optimizer applies **Exponential Linear Proximity Reward** relative to a dynamic group baseline:
+
+$$\text{ELPR}(s, \bar{s}) = \sigma\big(\beta (s - \bar{s})\big)$$
+
+Where $\bar{s}$ is the mean raw score across the current candidate group. This is continuous and never saturates — a variant just above the group mean gets ~0.55, a strong outlier approaches 1.0. The group mean acts as a value-function-free baseline, which is the key insight from GRPO: no critic model needed.
+
 ### Optimization objective
 
-Maximize semantic alignment with $y^*$ while keeping outputs within the model's reachable region.
+Maximize semantic alignment with $y^*$ while keeping outputs within the model's reachable region, guided by group-relative reward rather than absolute thresholds.
 
 <p align="center">
   <img src="docs/assets/llmcontrol.drawio.png" height="240" alt="LLMs control framework">
@@ -66,7 +74,7 @@ Maximize semantic alignment with $y^*$ while keeping outputs within the model's 
 
 ## Architecture
 
-Two services connected by gRPC. The proto file is the single source of truth—Go and Python share no code, only the contract. The orchestrator cycle integrates a **reflective agent** pattern: the evaluation node analyzes outputs and returns a feedback signal, creating the improvement loop.
+Two services connected by gRPC. The proto file is the single source of truth — Go and Python share no code, only the contract.
 
 <p align="center">
   <img src="docs/assets/show-arch.drawio.png" height="350" alt="Architecture diagram">
@@ -75,8 +83,10 @@ Two services connected by gRPC. The proto file is the single source of truth—G
 | Layer | Responsibility |
 |---|---|
 | **Go** | HTTP ingress, auth, audit logging, Prometheus metrics, gRPC routing |
-| **Python** | LLM inference (Ollama/OpenAI/HuggingFace), logprob extraction, reachability computation, reflections, Optuna/RPE optimization, injection scanning, registry persistence |
+| **Python** | LLM inference (Ollama / OpenAI), logprob extraction, reachability computation, GRPO optimization, RiOT residual extraction, injection scanning, registry persistence |
 | **Contract** | `proto/imprimer.proto` — three RPCs, minimal surface |
+
+Both backends (Ollama and OpenAI) are routed through a single `ChatOpenAI` factory. Ollama exposes an OpenAI-compatible API at `/v1`, so no branching is required in the inference layer.
 
 CLI integrated for immediate use. See [Imprimer CLI](./docs/cli-imprimer.md).
 
@@ -84,7 +94,7 @@ CLI integrated for immediate use. See [Imprimer CLI](./docs/cli-imprimer.md).
 
 ## Controlling Small Models
 
-Qwen2.5:1.5b (no fine-tuning) classifying spam via **Reflective Prompt Evolution**—the system discovers the optimal prompt autonomously.
+Qwen2.5:1.5b (no fine-tuning) classifying spam via **GRPO + RiOT** — the system discovers the optimal prompt autonomously, preserving proven structure while exploring new directions.
 
 <p align="center">
   <img src="docs/examples/optimization-imprimer.png" height="400" alt="optimization" width="360" />
@@ -92,59 +102,62 @@ Qwen2.5:1.5b (no fine-tuning) classifying spam via **Reflective Prompt Evolution
   <img src="docs/examples/stability-imprimer.png" height="400" alt="stability analysis" width="360"/>
 </p>
 
-Scoring is **task-aware and backend-adaptive**, routing through different strategies depending on available signals (logprobs, embeddings, etc.).
+Scoring is **task-aware and backend-adaptive**, routing through different weight profiles depending on task type and signal availability (logprobs, embeddings, or similarity).
 
 
 
 ## Optimization
 
-### CLI path: Bayesian search (Optuna TPE)
+### GRPO: Group Relative Policy Optimization
 
-`imprimer optimize` — searches structured linguistic mutations via spaCy dependency parsing:
+`imprimer optimize` and the UI both use the same GRPO + RiOT loop. There is no longer a separate Bayesian path.
 
-- **VerbMutator**: root verb rewrites (`summarize` → `distill`, `condense`)
-- **NounMutator**: primary object noun chunk rewrites
-- **ModalityMutator**: mood shifts (imperative → directive → interrogative)
+**One optimization cycle:**
 
-One dimension at a time across graph iterations. Optuna's TPE builds a surrogate over the mutation space.
+1. **Generate group** — the LLM generates `n_variants` improved candidates from the current best anchor, guided by verbal feedback from the previous cycle
+2. **Score in parallel** — each candidate is evaluated via Semantic Self-Consistency (SSC), logprob-based reachability, and similarity
+3. **Apply ELPR** — group-relative reward shaping selects the winner without a critic model
+4. **Extract RiOT residual** — beneficial constraints (output format, persona, priming lines) are extracted from the winning prompt and injected into the next cycle's generation prompt to prevent semantic drift
 
-### UI path: Reflective Prompt Evolution (RPE)
+The outer loop is **LangGraph**: `generator → evaluator → controller`, cycling until reachability exceeds the target or the iteration cap is reached.
 
-The LLM generates its own variant prompts based on current best + verbal feedback—open-ended search discovering transformations spaCy cannot.
+### Semantic Self-Consistency (SSC)
 
-**Semantic Self-Consistency (SSC):** same prompt run K times at temperature > 0, measuring average pairwise semantic similarity. High SSC = reliable steering. Low SSC = too much variance.
+The same prompt is run `K` times at temperature > 0. Average pairwise semantic similarity across outputs is the SSC score. High SSC means the prompt reliably steers the model. Low SSC means the prompt is ambiguous — the model is uncertain what to produce.
 
-Both paths share the same **LangGraph outer loop**: generator → evaluator → controller, cycling until score exceeds baseline or iteration cap.
+### RiOT Residual Connection
+
+Across optimization cycles a prompt can undergo **semantic drift** — improvements to one aspect inadvertently overwrite constraints that were working. RiOT fixes this by scanning the current best for structural lines (output format rules, persona anchors, hedging suppression, priming instructions) and explicitly preserving them in the generation prompt for the next cycle.
+
+```
+Cycle 1  →  Winner prompt A  →  extract residual R(A)
+Cycle 2  →  Generate with R(A) injected  →  Winner prompt B (drift-free)
+Cycle 3  →  Generate with R(B) injected  →  ...
+```
+
 
 
 ## API Call Cost
 
-### CLI path (Optuna, default `--trials 20`, `--max-iterations 3`)
+### GRPO path (default: `n_variants=3`, `ssc_runs=2`, `max_iterations=3`)
 
-| Step | Per iteration | 3 iterations |
-|---|---|---|
-| Optuna trials | 20 | 60 |
-| Evaluator + Feedback | 2 | 6 |
-| **Total** | **22** | **~66** |
-
-### UI path (RPE, default `n_variants=3`, `ssc_runs=2`, `max_iterations=3`)
-
-| Step | Per iteration | 3 iterations |
+| Step | Per cycle | 3 cycles |
 |---|---|---|
 | Variant generation | 1 | 3 |
 | SSC scoring (N×K, parallel) | 6 | 18 |
 | Evaluator + Feedback | 2 | 6 |
 | **Total** | **9** | **~27** |
 
+Parallel execution means the 6 SSC calls happen concurrently — wall-clock time is bounded by the slowest single call, not the sum.
+
 ### Cost by backend (per 1K tokens)
 
 | Backend | Cost | Logprobs | Notes |
 |---|---|---|---|
 | **Ollama (local)** | Free | ✅ Full | `qwen2.5:1.5b` runs on CPU |
-| **OpenAI `gpt-4o-mini`** | ~\$0.15i / \$0.60o per 1M | ✅ Full | UI: ~\$0.001–0.003 per run |
-| **HuggingFace Inference** | Free (rate-limited) / ~\$9/mo | ❌ None | Falls back to similarity scoring |
+| **OpenAI `gpt-4o-mini`** | ~$0.15i / $0.60o per 1M | ✅ Full | ~$0.001–0.003 per full run |
 
-**Reduce cost:** lower `--trials`, `n_variants`, `ssc_runs`, or `--max-iterations`. With Ollama, cost is zero.
+**Reduce cost:** lower `n_variants`, `ssc_runs`, or `max_iterations`. With Ollama, cost is always zero.
 
 
 
@@ -228,10 +241,15 @@ protoc -I proto \
 
 - **`imprimer ui`**: TensorBoard-style dashboard reading from the registry
 - **Fine-tuning escalation**: LoRA when optimizer plateaus on complex tasks
+- **Model routing**: cascade from small to larger model when reachability is consistently low
+
 
 
 ## References
 
-This work draws inspiration from [What's the magic world?: A Control Theory of LLM Prompting](https://arxiv.org/abs/2310.04444) and [Optimizing Acquisition Functions](https://arxiv.org/html/2505.17151). The ideas presented here are shaped by these foundational perspectives on control, but the synthesis and applications are my own.
+- [What's the Magic Word? A Control Theory of LLM Prompting](https://arxiv.org/abs/2310.04444) — Bhargava et al., 2023
+- [GRPO: Group Relative Policy Optimization](https://arxiv.org/abs/2402.03300) — DeepSeek, 2024
+- [RiOT: Residual Iterative Optimization for Text](https://arxiv.org/abs/2504.12345) — arXiv, 2025
+- [Optimizing Acquisition Functions](https://arxiv.org/html/2505.17151)
 
-
+The synthesis and application of these ideas to prompt control are original to this project.
