@@ -1,5 +1,5 @@
 """
-Thi iss the composite score computation for prompt variants.
+Composite score computation for prompt variants.
 
 Three scoring dimensions:
   reachability : token-level confidence via logprob sigmoid (primary signal)
@@ -44,6 +44,7 @@ class Score:
     similarity:    Optional[float] = None
 
 
+
 def _compute_reachability(
     logprobs: list,
     baseline_logprobs: Optional[list] = None,
@@ -74,6 +75,7 @@ def _compute_reachability(
     return round(score, 4)
 
 
+
 def _creative_quality_heuristic(text: str) -> float:
     """
     Heuristic quality score for creative/open-ended tasks when no reference exists.
@@ -85,6 +87,7 @@ def _creative_quality_heuristic(text: str) -> float:
     diversity     = len(set(tokens)) / len(tokens)
     length_score  = 1.0 / (1.0 + math.exp(-0.1 * (len(tokens) - 50)))
     return round(0.6 * diversity + 0.4 * length_score, 4)
+
 
 
 def score(
@@ -135,7 +138,7 @@ def score(
 
     if task in OPEN_ENDED_TASKS:
         if result.logprobs:
-            # Logprobs available: reachability is the quality signal; max quality
+            # logprobs available: reachability is the quality signal; max quality
             quality_score = 1.0
         else:
             quality_score = _creative_quality_heuristic(result.text)
@@ -144,8 +147,8 @@ def score(
         # strict tasks: classify, extract, qa, translate, ...
         if expected_output:
             if task in {"classify", "extract"}:
-                # embedding similarity is misleading for short labels.
-                # "positive" vs "affirmative" scores ~0.3 by embedding but is correct.
+                # mbedding similarity is misleading for short labels.
+                # "Positive" vs "Affirmative" scores ~0.3 by embedding but is correct
                 norm_out = result.text.strip().lower()
                 norm_exp = expected_output.strip().lower()
                 similarity_score = 1.0 if norm_exp in norm_out else _similarity(result.text, expected_output)
@@ -155,6 +158,7 @@ def score(
             similarity_score = 0.5   # neutral: no reference, no penalty
 
         quality_score = similarity_score
+
 
     combined = (
         weights["quality"]      * quality_score

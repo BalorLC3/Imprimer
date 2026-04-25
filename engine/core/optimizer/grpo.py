@@ -1,4 +1,6 @@
-"""
+"""Group Relative Policy Optimization for prompt selection.
+
+
 Core idea (from GRPO research, 2025):
     1. Generate a GROUP of N candidate prompts
     2. Score every candidate in parallel
@@ -19,9 +21,10 @@ from utils.create_logger import get_logger
 logger = get_logger(__name__)
 
 
-GRPO_STEEP = 3.0   # sigmoid steepness for ELPR reward shaping
-SSC_RUNS   = 2     # k runs for Semantic Self-Consistency per variant
-N_VARIANTS = 5     # default group size
+GRPO_STEEP = 3.0   # Sigmoid steepness for ELPR reward shaping
+SSC_RUNS   = 2     # K runs for Semantic Self-Consistency per variant
+N_VARIANTS = 5     # Default group size
+
 
 
 @dataclass
@@ -33,6 +36,7 @@ class GRPOResult:
     group_mean:       float   # mean raw score across the group (diversity signal)
     group_std:        float   # std of raw scores (spread of candidates)
     history: list = field(default_factory=list)
+
 
 
 def elpr_reward(score: float, group_mean: float, steep: float = GRPO_STEEP) -> float:
@@ -55,7 +59,7 @@ def group_stats(scores: list[float]) -> tuple[float, float]:
     return round(mean, 4), round(math.sqrt(variance), 4)
 
 
-# orchestration 
+
 def run_grpo(
     task: str,
     base_prompt: str,
@@ -80,7 +84,7 @@ def run_grpo(
                           current best prompt. Injected into generation so
                           the LLM preserves proven structure while exploring.
     """
-    # import helpers from rpe to avoid circular; rpe does not import grpo
+    # Import helpers from rpe to avoid circular; rpe does not import grpo.
     from core.optimizer.rpe import (
         _generate_variants_with_residual,
         _compute_ssc,
@@ -121,7 +125,7 @@ def run_grpo(
             history=[],
         )
 
-    # score all variants in parallel
+
     def _score_one(variant_str: str) -> dict:
         ssc, reach, sample_output = _compute_ssc(
             prompt=variant_str,
@@ -181,12 +185,11 @@ def run_grpo(
             history=[],
         )
 
-    # Apply ELPR reward shaping 
 
     raw_scores = [h["score"] for h in history]
     g_mean, g_std = group_stats(raw_scores)
 
-    # annotate each candidate with its group-relative reward
+    # Annotate each candidate with its group-relative reward
     for h in history:
         h["grpo_reward"] = elpr_reward(h["score"], g_mean)
 

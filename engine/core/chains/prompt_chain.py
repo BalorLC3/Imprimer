@@ -1,3 +1,7 @@
+"""
+Unified inference layer
+"""
+
 from dataclasses import dataclass, field
 from enum import Enum
 import time
@@ -13,9 +17,9 @@ from utils.create_logger import get_logger
 logger = get_logger(__name__)
 
 
-# Task token budgets are what we use to control they system
+
 TASK_MAX_TOKENS: dict[str, int] = {
-    "classify":       10, 
+    "classify":       10,
     "extract":        50,
     "summarize":     100,
     "reasoning":     150,
@@ -79,6 +83,7 @@ def _build_chat_client(
         )
 
     raise ValueError(f"Unknown backend: {backend!r}")
+
 
 
 def _extract_logprobs(response) -> list:
@@ -213,7 +218,7 @@ def call_llm(
 ) -> str:
     """
     Minimal LLM call for internal use: variant generation, reflection, feedback.
-    Returns plain text only, no logprobs, no caching, no template processing.
+    Returns plain text only — no logprobs, no caching, no template processing.
     Raises on failure so callers can decide how to handle it.
     """
     try:

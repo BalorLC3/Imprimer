@@ -1,15 +1,11 @@
 """
-embedder.py => Semantic similarity scoring.
-
-Uses sentence-transformers (all-MiniLM-L6-v2 by default) for cosine similarity.
-
-Falls back to Python's SequenceMatcher if sentence-transformers is unavailable,
-so the system never hard-fails on a missing optional dependency.
+Semantic similarity scoring.
 """
 
 import os
 from difflib import SequenceMatcher
 from typing import Any
+import threading
 
 from utils.create_logger import get_logger
 
@@ -18,35 +14,39 @@ logger = get_logger(__name__)
 _embedder: Any = None
 _st_util: Any = None
 _load_failed: bool = False
+_load_lock = threading.Lock()
 
 
 def _ensure_embedder() -> None:
     global _embedder, _st_util, _load_failed
+    # Fast path: already loaded or already failed
     if _embedder is not None or _load_failed:
         return
+    # Slow path: serialize model loading across threads
+    with _load_lock:
+        if _embedder is not None or _load_failed:
+            return  # Another thread loaded it while we waited
+        try:
+            from sentence_transformers import SentenceTransformer, util
+            import torch
 
-    try:
-        from sentence_transformers import SentenceTransformer, util
-        import torch
+            model_name = os.getenv("EMBEDDER_MODEL", "all-MiniLM-L6-v2")
+            device = (
+                "cuda"
+                if torch.cuda.is_available()
+                else ("mps" if torch.backends.mps.is_available() else "cpu")
+            )
 
-        model_name = os.getenv("EMBEDDER_MODEL", "all-MiniLM-L6-v2")
-
-        device = (
-            "cuda"
-            if torch.cuda.is_available()
-            else ("mps" if torch.backends.mps.is_available() else "cpu")
-        )
-
-        logger.info("Loading embedder: %s on %s", model_name, device)
-        _embedder = SentenceTransformer(model_name_or_path=model_name, device=device)
-        _st_util = util
-    except Exception as exc:
-        _load_failed = True
-        logger.warning(
-            "sentence-transformers unavailable; falling back to SequenceMatcher. "
-            "Error: %s",
-            exc,
-        )
+            logger.info("Loading embedder: %s on %s", model_name, device)
+            _embedder = SentenceTransformer(model_name_or_path=model_name, device=device)
+            _st_util = util
+        except Exception as exc:
+            _load_failed = True
+            logger.warning(
+                "sentence-transformers unavailable; falling back to SequenceMatcher. "
+                "Error: %s",
+                exc,
+            )
 
 
 def _simple_similarity(a: str, b: str) -> float:

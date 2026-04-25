@@ -47,22 +47,50 @@ _RESIDUAL_KEYWORDS = frozenset({
     "never", "first", "step", "respond", "format",
 })
 
+# minimum character length for a string to be considered a valid prompt
+_MIN_PROMPT_LEN = 20
+ 
+# patterns that indicate the LLM echoed a list label instead of a real prompt
+_LABEL_PATTERNS = re.compile(
+    r"^(version\s*\d+|v\d+|prompt\s*\d+|option\s*\d+|variant\s*\d+|#\s*\d+|improved version)$",
+    re.IGNORECASE,
+)
+
+
+def _is_valid_prompt(text: str, anchor: str) -> bool:
+    """
+    Returns True only if `text` looks like a real prompt, not a list label.
+ 
+    Rejects:
+      - Strings shorter than _MIN_PROMPT_LEN chars
+      - Strings that match known list-label patterns (e.g. "version 3")
+      - Strings identical to the anchor (no-op variants)
+    """
+    stripped = text.strip()
+    if len(stripped) < _MIN_PROMPT_LEN:
+        return False
+    if _LABEL_PATTERNS.match(stripped):
+        return False
+    if stripped == anchor.strip():
+        return False
+    return True
+
 
 def _extract_residual_content(prompt: str) -> str:
     """
     RiOT residual extractor.
-
+ 
     Scans the winning prompt for lines that contain structural constraints
     (output format, persona, priming, hedging suppression) and returns them
     as a block to be preserved in the next generation cycle.
-
+ 
     Conservative extraction: only lines with high-signal keywords are kept.
-    Empty string is returned when nothing useful is found, which is handled,
-    generation still works, just without residual injection
+    Empty string is returned when nothing useful is found, which is handled
+    gracefully, generation still works, just without residual injection.
     """
     if not prompt.strip():
         return ""
-
+ 
     residual_lines = []
     for line in prompt.strip().splitlines():
         stripped = line.strip()
@@ -71,7 +99,7 @@ def _extract_residual_content(prompt: str) -> str:
         lower = stripped.lower()
         if any(kw in lower for kw in _RESIDUAL_KEYWORDS):
             residual_lines.append(stripped)
-
+ 
     result = "\n".join(residual_lines)
     if result:
         logger.debug(f"riot residual extracted ({len(residual_lines)} lines)")
@@ -89,11 +117,11 @@ def _generate_variants_with_residual(
 ) -> list[str]:
     """
     Asks the LLM to generate N improved variants of the anchor prompt.
-
+ 
     RiOT: if residual_content is non-empty, it is injected as a block of
     constraints the model MUST preserve. This prevents semantic drift across
     optimization cycles by carrying forward what is already working.
-
+ 
     Parsing pipeline (robust for small models):
       1. Strict JSON array parse
       2. Quoted-string extraction fallback
@@ -101,13 +129,13 @@ def _generate_variants_with_residual(
       4. Returns [anchor] on total failure so the system never crashes
     """
     anchor = current_best_prompt if current_best_prompt else base_prompt
-
+ 
     feedback_block = f"\nPrevious feedback:\n{feedback}\n" if feedback.strip() else ""
     residual_block = (
-        f"\nThese constraints were proven effective, preserve them in every version:\n"
+        f"\nThese constraints were proven effective — preserve them in every version:\n"
         f"{residual_content}\n"
     ) if residual_content.strip() else ""
-
+ 
     generation_prompt = (
         f"Improve this AI prompt for the task: {task}\n\n"
         f"Current best prompt:\n{anchor}\n"
@@ -119,7 +147,7 @@ def _generate_variants_with_residual(
         f"- No explanations, no numbering outside the JSON\n\n"
         f'Return ONLY a JSON array: ["version 1", "version 2", ...]'
     )
-
+ 
     raw = ""
     try:
         raw = call_llm(
@@ -128,7 +156,7 @@ def _generate_variants_with_residual(
             temperature=0.7,
             max_tokens=500,
         )
-
+ 
 
         cleaned = re.sub(r"```json\s*", "", raw)
         cleaned = re.sub(r"```\s*", "", cleaned).strip()
@@ -136,41 +164,43 @@ def _generate_variants_with_residual(
         if match:
             try:
                 variants = json.loads(match.group())
-                valid = [v for v in variants if isinstance(v, str) and len(v.strip()) > 5]
+                valid = [
+                    v for v in variants
+                    if isinstance(v, str) and _is_valid_prompt(v, anchor)
+                ]
                 if valid:
                     logger.info(f"rpe generated {len(valid)} variants (JSON)")
                     return valid[:n_variants]
             except json.JSONDecodeError:
                 pass
-
+ 
 
         quoted = re.findall(r'"([^"]{10,})"', cleaned)
-        valid = [v.strip() for v in quoted if v.strip() and v.strip() != anchor]
+        valid = [v.strip() for v in quoted if _is_valid_prompt(v, anchor)]
         if valid:
             logger.info(f"rpe generated {len(valid)} variants (quoted fallback)")
             return valid[:n_variants]
-
+ 
 
         lines = [
             l.strip().lstrip("0123456789.-) ")
             for l in cleaned.splitlines()
             if len(l.strip()) > 15
         ]
-        valid = [l for l in lines if l and l != anchor]
+        valid = [l for l in lines if _is_valid_prompt(l, anchor)]
         if valid:
             logger.info(f"rpe generated {len(valid)} variants (line fallback)")
             return valid[:n_variants]
-
+ 
     except Exception as exc:
-        logger.warning(f"variant generation failed: {exc} => returning anchor")
-
+        logger.warning(f"variant generation failed: {exc} — returning anchor")
+ 
     if raw:
         logger.warning(f"all parsers failed. Raw snippet: {raw[:200]!r}")
-
+ 
     return [anchor]
+ 
 
-
-# Semantic Self-Consistency 
 
 def _compute_ssc(
     prompt: str,
@@ -182,12 +212,12 @@ def _compute_ssc(
 ) -> tuple[float, float, str]:
     """
     Semantic Self-Consistency (SSC) for one prompt.
-
+ 
     Runs the prompt K times at temperature > 0 and computes average pairwise
     semantic similarity of the outputs:
-      high SSC → prompt reliably steers the model (low entropy)
-      low SSC  → model is uncertain, prompt is under-specified
-
+      high SSC => prompt reliably steers the model (low entropy)
+      low SSC  => model is uncertain, prompt is under-specified
+ 
     Returns: (ssc_score, avg_reachability, sample_output)
       - avg_reachability is 0.6 neutral when logprobs are unavailable
       - sample_output is the first non-empty run (used for similarity scoring)
@@ -200,10 +230,10 @@ def _compute_ssc(
         temperature=temperature,
         max_workers=k,
     )
-
+ 
     outputs = []
     reachabilities = []
-
+ 
     for r in results:
         if r.text.strip():
             outputs.append(r.text)
@@ -211,11 +241,12 @@ def _compute_ssc(
             reachabilities.append(_compute_reachability(r.logprobs))
         else:
             reachabilities.append(0.6)  # neutral fallback
-
+ 
     if not outputs:
         return 0.0, 0.6, ""
-
+ 
     ssc = pairwise_similarity(outputs) if len(outputs) > 1 else 0.6
     avg_reach = sum(reachabilities) / len(reachabilities)
-
+ 
     return round(ssc, 4), round(avg_reach, 4), outputs[0]
+ 

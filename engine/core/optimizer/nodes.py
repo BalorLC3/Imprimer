@@ -22,6 +22,7 @@ from utils.create_logger import get_logger
 logger = get_logger(__name__)
 
 
+
 def _generate_feedback(
     previous_prompt: str,
     current_prompt: str,
@@ -52,6 +53,7 @@ def _generate_feedback(
     except Exception as exc:
         logger.warning(f"feedback generation failed: {exc}")
         return ""
+
 
 
 def generator_node(state: PromptState) -> dict:
@@ -109,6 +111,7 @@ def generator_node(state: PromptState) -> dict:
     }
 
 
+
 def evaluator_node(state: PromptState) -> dict:
     """
     Evaluator: authoritative scoring of the generator's candidate.
@@ -152,12 +155,12 @@ def evaluator_node(state: PromptState) -> dict:
 
     updates: dict = {}
 
-    # Detect and store logprob availability on first run
+    # detect and store logprob availability on first run
     if state.get("logprobs_available") is None:
         updates["logprobs_available"] = has_logprobs
         logger.info(f"evaluator logprobs_available={has_logprobs} (first detection)")
 
-    # Promotion criterion: reachability when logprobs present, combined otherwise
+    # promotion criterion: reachability when logprobs present, combined otherwise
     if has_logprobs or state.get("logprobs_available"):
         control_signal   = reachability
         best_control     = state["best_reachability"]
@@ -169,7 +172,7 @@ def evaluator_node(state: PromptState) -> dict:
 
     is_new_best = control_signal > best_control
 
-    # Persist trial to registry
+    # persist trial to registry
     run_id = state.get("run_id") or str(uuid.uuid4())
     if not state.get("run_id"):
         updates["run_id"] = run_id
@@ -206,7 +209,7 @@ def evaluator_node(state: PromptState) -> dict:
         })
         logger.info(
             f"evaluator new best ({signal_name}): "
-            f"{best_control:.4f} → {control_signal:.4f} "
+            f"{best_control:.4f} -> {control_signal:.4f} "
             f"residual_lines={len(new_residual.splitlines())} "
             f"prompt={state['current_prompt'][:60]!r}"
         )

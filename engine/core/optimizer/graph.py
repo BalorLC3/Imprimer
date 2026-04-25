@@ -1,18 +1,9 @@
-"""LangGraph optimization graph, the outer control loop.
+"""
+LangGraph optimization graph, the outer control loop.
 
 Graph structure:
-  generator => evaluator => controller => (generator | END)
+  generator → evaluator → controller → (generator | END)
 
-State invariants:
-  base_prompt      : never mutated; the generator always uses this as the
-                     semantic anchor to prevent decorator accumulation
-  current_prompt   : best candidate from the current GRPO cycle
-  backend          : stored as str (ModelBackend.value); nodes recover the
-                     enum via ModelBackend(state["backend"])
-  residual_content : RiOT constraints extracted from the current best;
-                     injected into each new generator cycle
-  last_feedback    : verbal reflection from the evaluator, fed back into
-                     the next generation prompt
 """
 
 from typing import Generator
@@ -91,12 +82,12 @@ def optimize(
         )
         baseline_obj = compute_score(
             result=baseline_result,
-            task=task,
             expected_output=expected_output,
+            task=task,
         )
     except Exception as exc:
         logger.error(f"baseline evaluation failed: {exc}")
-        # yield a safe fallback so the UI can still show an error gracefully
+        # Yield a safe fallback so the UI can still show an error gracefully
         yield {
             "best_prompt":           base_prompt,
             "best_score":            0.0,
@@ -191,7 +182,7 @@ def optimize(
     except Exception as exc:
         logger.error(f"graph stream failed at iteration "
                      f"{current_state.get('current_iteration', '?')}: {exc}")
-        # yield best-known state so UI/gRPC can still return something useful
+        # Yield best-known state so UI/gRPC can still return something useful
         best_reach  = current_state.get("best_reachability", baseline_reachability)
         reach_delta = round(best_reach - baseline_reachability, 4)
         yield {
