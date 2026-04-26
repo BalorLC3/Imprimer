@@ -1,81 +1,101 @@
 """
-LangGraph node functions for the prompt optimization graph.
-
-Graph:  generator → evaluator → controller → (generator | END)
-
-  generator  : runs one GRPO+RiOT step; returns best candidate for this cycle
-  evaluator  : scores the candidate authoritatively; promotes new global bests
-               and extracts RiOT residual content for the next cycle
-  controller : decides whether to continue or terminate
+LangGraph node functions.
 """
 
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from core.optimizer.state import PromptState
 from core.optimizer.grpo import run_grpo
-from core.optimizer.rpe import _extract_residual_content
-from core.chains.prompt_chain import ModelBackend, run_variant, call_llm
-from core.evaluator.scorer import score as compute_score
+from core.optimizer.rpe import extract_residual_content
+from core.chains.prompt_chain import ModelBackend, run_variant
+from core.evaluator.scorer import rank_score, compute_reachability
 from core.registry.prompt_store import OptimizationTrialRecord, save_optimization_trial
 from utils.create_logger import get_logger
 
 logger = get_logger(__name__)
 
 
+def _structured_diff(previous: str, current: str) -> str:
+    """
+    Fix 6: deterministic word-level diff instead of LLM reflection.
 
-def _generate_feedback(
-    previous_prompt: str,
-    current_prompt: str,
-    previous_score: float,
-    current_score: float,
+    Zero model calls. Tells the generator what changed so it can build
+    on improvements rather than exploring random directions. More reliable
+    than asking a 1.5B model to explain its own output.
+    """
+    prev_words = set(previous.lower().split())
+    curr_words = set(current.lower().split())
+    added   = sorted(curr_words - prev_words)[:10]
+    removed = sorted(prev_words - curr_words)[:10]
+
+    parts = []
+    if added:
+        parts.append(f"Added terms: {', '.join(added)}")
+    if removed:
+        parts.append(f"Removed terms: {', '.join(removed)}")
+    if not parts:
+        parts.append("Minor rephrasing, same core intent")
+    return ". ".join(parts) + "."
+
+
+def _score_across_examples(
+    prompt: str,
+    primary_input: str,
+    primary_expected: str,
+    extra_examples: list[dict],
+    task: str,
     backend: ModelBackend,
-) -> str:
+) -> tuple[float, float, float]:
     """
-    Generates a brief, actionable explanation of why the prompt improved/regressed.
-    Used as verbal context injected into the next GRPO generation cycle.
-    """
-    direction = "improved" if current_score >= previous_score else "regressed"
-    prompt_text = (
-        f"An AI prompt was changed and the score {direction} "
-        f"(from {previous_score:.3f} to {current_score:.3f}).\n\n"
-        f"Previous:\n{previous_prompt}\n\n"
-        f"New:\n{current_prompt}\n\n"
-        f"In two sentences, explain why. Focus on clarity, specificity, or constraint "
-        f"precision. No preamble, no hedging."
-    )
-    try:
-        return call_llm(
-            prompt_text=prompt_text,
-            backend=backend,
-            temperature=0.3,
-            max_tokens=120,
-        )
-    except Exception as exc:
-        logger.warning(f"feedback generation failed: {exc}")
-        return ""
+    Fix 1: runs the prompt against the primary example + all extra_examples
+    in parallel and returns averaged (reachability, quality, combined).
 
+    This is only called on the GRPO winner in the evaluator — not during
+    ranking (which uses the primary example only for speed).
+    """
+    all_examples = [{"input": primary_input, "expected": primary_expected}] + list(extra_examples)
+
+    def _score_one(ex: dict):
+        r = run_variant(
+            template=prompt,
+            input_text=ex.get("input", ""),
+            task=task,
+            backend=backend,
+        )
+        return rank_score(r, task=task, expected_output=ex.get("expected", ""))
+
+    scores = []
+    with ThreadPoolExecutor(max_workers=len(all_examples)) as executor:
+        futures = [executor.submit(_score_one, ex) for ex in all_examples]
+        for f in as_completed(futures):
+            try:
+                scores.append(f.result())
+            except Exception as exc:
+                logger.error(f"multi-example scoring failed: {exc}")
+
+    if not scores:
+        return 0.5, 0.5, 0.5
+
+    avg_reach   = round(sum(s.reachability for s in scores) / len(scores), 4)
+    avg_quality = round(sum(s.quality for s in scores) / len(scores), 4)
+    avg_combined = round(sum(s.combined for s in scores) / len(scores), 4)
+    return avg_reach, avg_quality, avg_combined
 
 
 def generator_node(state: PromptState) -> dict:
     """
-    Generator: one GRPO+RiOT iteration.
-
-    Generates N candidate prompts with the current global best as the anchor,
-    injects RiOT residual constraints to prevent semantic drift, scores all
-    candidates via SSC+reachability in parallel, and returns the winner.
+    GRPO+RiOT step: generate N variants, score in parallel, return winner.
+    Generator model: 1 call. Evaluator model: N parallel calls.
     """
     iteration = state["current_iteration"]
     backend   = ModelBackend(state["backend"])
-    feedback  = state.get("last_feedback", "")
-    residual  = state.get("residual_content", "")
-    anchor    = state.get("global_best_prompt", state["base_prompt"])
+    anchor    = state["best_prompt"]
 
     logger.info(
-        f"generator iteration={iteration} "
-        f"backend={state['backend']} "
-        f"n_variants={state['n_variants']} "
-        f"has_residual={bool(residual)} "
-        f"anchor={anchor[:60]!r}"
+        f"generator iter={iteration} backend={state['backend']} "
+        f"n_variants={state['n_variants']} anchor={anchor[:60]!r} "
+        f"has_residual={bool(state.get('residual_content'))}"
     )
 
     result = run_grpo(
@@ -84,95 +104,76 @@ def generator_node(state: PromptState) -> dict:
         input_example=state["input_example"],
         expected_output=state["expected_output"],
         backend=backend,
-        feedback=feedback,
+        feedback=state.get("last_feedback", ""),
         n_variants=state["n_variants"],
         current_best_prompt=anchor,
-        residual_content=residual,
+        residual_content=state.get("residual_content", ""),
     )
 
-    cycle_history = [
-        {**h, "iteration": iteration, "grpo_group_mean": result.group_mean}
-        for h in result.history
-    ]
-
     logger.info(
-        f"generator iteration={iteration} "
-        f"winner_score={result.best_score:.4f} "
-        f"winner_reach={result.best_reachability:.4f} "
+        f"generator iter={iteration} winner_score={result.best_score:.4f} "
+        f"reach={result.best_reachability:.4f} "
         f"grpo_reward={result.best_grpo_reward:.4f} "
-        f"group_mean={result.group_mean:.4f} "
-        f"group_std={result.group_std:.4f}"
+        f"group_mean={result.group_mean:.4f} std={result.group_std:.4f}"
     )
 
     return {
-        "current_prompt":   result.best_prompt,
-        "grpo_group_mean":  result.group_mean,
-        "history":          state["history"] + cycle_history,
+        "current_prompt":  result.best_prompt,
+        "grpo_group_mean": result.group_mean,
     }
-
 
 
 def evaluator_node(state: PromptState) -> dict:
     """
-    Evaluator: authoritative scoring of the generator's candidate.
+    Authoritative scoring of the generator's winner.
 
-    Runs the candidate prompt once at temperature=0 to get a clean, final
-    score (including logprobs for reachability). Promotes the candidate to
-    global best if it exceeds the current best.
+    Fix 1: Scores against primary + extra_examples in parallel, averages.
+           The group mean used for promotion reflects generalization, not
+           memorization of one input.
 
-    On promotion: extracts RiOT residual from the new best so the next
-    generation cycle can preserve its proven constraints.
+    The run_variant call for the primary example is always a cache hit
+    (GRPO already ran this exact prompt at temp=0). Extra examples add
+    E parallel calls to the evaluator model.
     """
     backend   = ModelBackend(state["backend"])
     iteration = state["current_iteration"]
 
-    result = run_variant(
-        template=state["current_prompt"],
-        input_text=state["input_example"],
+    extra_examples = state.get("extra_examples", [])
+
+    avg_reach, avg_quality, avg_combined = _score_across_examples(
+        prompt=state["current_prompt"],
+        primary_input=state["input_example"],
+        primary_expected=state["expected_output"],
+        extra_examples=extra_examples,
         task=state["task"],
         backend=backend,
     )
 
-    s = compute_score(
-        result=result,
-        baseline_result=None,
+    has_logprobs = bool(run_variant(
+        template=state["current_prompt"],
+        input_text=state["input_example"],
         task=state["task"],
-        expected_output=state["expected_output"],
-    )
-
-    reachability = s.reachability
-    combined     = s.combined
-    similarity   = s.similarity if s.similarity is not None else 0.5
-    has_logprobs = bool(result.logprobs)
+        backend=backend,
+    ).logprobs)
 
     logger.info(
-        f"evaluator iteration={iteration} "
-        f"reachability={reachability:.4f} "
-        f"combined={combined:.4f} "
-        f"current_best_reach={state['best_reachability']:.4f} "
-        f"has_logprobs={has_logprobs}"
+        f"evaluator iter={iteration} "
+        f"avg_reach={avg_reach:.4f} avg_combined={avg_combined:.4f} "
+        f"best_reach={state['best_reachability']:.4f} "
+        f"examples={1 + len(extra_examples)}"
     )
 
-    updates: dict = {}
+    updates: dict = {"current_cycle_reachability": avg_reach}
 
-    # detect and store logprob availability on first run
     if state.get("logprobs_available") is None:
         updates["logprobs_available"] = has_logprobs
-        logger.info(f"evaluator logprobs_available={has_logprobs} (first detection)")
 
-    # promotion criterion: reachability when logprobs present, combined otherwise
-    if has_logprobs or state.get("logprobs_available"):
-        control_signal   = reachability
-        best_control     = state["best_reachability"]
-        signal_name      = "reachability"
-    else:
-        control_signal   = combined
-        best_control     = state["best_score"]
-        signal_name      = "combined"
+    control_signal = avg_reach if (has_logprobs or state.get("logprobs_available")) else avg_combined
+    best_control   = state["best_reachability"] if (has_logprobs or state.get("logprobs_available")) else state["best_score"]
+    signal_name    = "reachability" if (has_logprobs or state.get("logprobs_available")) else "combined"
 
     is_new_best = control_signal > best_control
 
-    # persist trial to registry
     run_id = state.get("run_id") or str(uuid.uuid4())
     if not state.get("run_id"):
         updates["run_id"] = run_id
@@ -186,26 +187,22 @@ def evaluator_node(state: PromptState) -> dict:
             candidate_prompt=state["current_prompt"],
             mutation="grpo_rpe",
             trial_number=iteration,
-            score=combined,
-            reachability=reachability,
-            similarity=similarity,
-            latency_ms=result.latency_ms,
+            score=avg_combined,
+            reachability=avg_reach,
+            similarity=avg_quality,
+            latency_ms=0.0,
             is_best=is_new_best,
         ))
     except Exception as exc:
         logger.error(f"registry save failed: {exc}")
 
-    # Promotion
     if is_new_best:
-        new_residual = _extract_residual_content(state["current_prompt"])
+        new_residual = extract_residual_content(state["current_prompt"])
         updates.update({
-            "global_best_prompt":       state["current_prompt"],
-            "global_best_score":        combined,
-            "global_best_reachability": reachability,
-            "best_prompt":              state["current_prompt"],
-            "best_reachability":        reachability,
-            "best_score":               combined,
-            "residual_content":         new_residual,
+            "best_prompt":       state["current_prompt"],
+            "best_reachability": avg_reach,
+            "best_score":        avg_combined,
+            "residual_content":  new_residual,
         })
         logger.info(
             f"evaluator new best ({signal_name}): "
@@ -214,69 +211,37 @@ def evaluator_node(state: PromptState) -> dict:
             f"prompt={state['current_prompt'][:60]!r}"
         )
 
-    # Always generate feedback for the next cycle
+    # Fix 6: structured diff instead of LLM reflection — 0 model calls
     if state["current_prompt"] != state["base_prompt"]:
-        prev_prompt  = state.get("global_best_prompt", state["base_prompt"])
-        prev_signal  = best_control
-        feedback     = _generate_feedback(
-            previous_prompt=prev_prompt,
-            current_prompt=state["current_prompt"],
-            previous_score=prev_signal,
-            current_score=control_signal,
-            backend=backend,
-        )
-        if feedback:
-            updates["last_feedback"] = feedback
-            logger.info(f"feedback: {feedback[:100]!r}")
-
-    # Ensure best_reachability is always present in updates
-    if not updates:
-        updates["best_reachability"] = state.get("best_reachability", 0.0)
+        feedback = _structured_diff(state["best_prompt"], state["current_prompt"])
+        updates["last_feedback"] = feedback
+        logger.info(f"feedback (diff): {feedback[:120]!r}")
 
     return updates
 
 
 def controller_node(state: PromptState) -> dict:
-    """
-    Controller: decides whether to continue or terminate.
-
-    Termination conditions:
-      - best_reachability >= target_score  (success)
-      - current_iteration >= max_iterations (cap reached)
-    """
-    iteration        = state["current_iteration"]
-    best_reachability = state["best_reachability"]
-    target           = state["target_score"]
-    max_iter         = state["max_iterations"]
-
-    target_reached = best_reachability >= target
-    cap_reached    = iteration >= max_iter - 1
+    iteration      = state["current_iteration"]
+    target_reached = state["best_reachability"] >= state["target_score"]
 
     logger.info(
-        f"controller iteration={iteration}/{max_iter} "
-        f"best_reachability={best_reachability:.4f}/{target:.4f} "
-        f"target_reached={target_reached} "
-        f"cap_reached={cap_reached}"
+        f"controller iter={iteration}/{state['max_iterations']} "
+        f"best_reach={state['best_reachability']:.4f}/{state['target_score']:.4f} "
+        f"target_reached={target_reached}"
     )
 
     return {
-        "current_iteration":   iteration + 1,
-        "target_reached":      target_reached,
+        "current_iteration":    iteration + 1,
+        "target_reached":       target_reached,
         "iterations_completed": iteration + 1,
     }
 
 
 def should_continue(state: PromptState) -> str:
     if state["target_reached"]:
-        logger.info(
-            f"graph terminating: target {state['target_score']:.4f} reached"
-        )
+        logger.info(f"graph terminating: target {state['target_score']:.4f} reached")
         return "end"
-
     if state["current_iteration"] >= state["max_iterations"]:
-        logger.info(
-            f"graph terminating: max iterations {state['max_iterations']} reached"
-        )
+        logger.info(f"graph terminating: max iterations {state['max_iterations']} reached")
         return "end"
-
     return "generator"

@@ -1,5 +1,10 @@
 """
-Shared state for the LangGraph optimization loop
+Shared state for the LangGraph optimization loop.
+
+Fields are grouped by lifecycle:
+  - immutable : set once at init, never change
+  - mutable   : updated each cycle by generator / evaluator / controller
+  - terminal  : set by controller, read by should_continue
 """
 
 from typing import TypedDict, Optional
@@ -8,48 +13,38 @@ from typing import TypedDict, Optional
 class PromptState(TypedDict):
     run_id: str
 
-    # task definition: never changes across iterations 
+    # Immutable task definition 
     task: str
     input_example: str
     expected_output: str
-    backend: str          
-    base_prompt: str      # immutable anchor
+    backend: str
+    base_prompt: str           # anchor; never overwritten
 
-    # contrl parameters 
+    # Control parameters 
     target_score: float
     max_iterations: int
-    n_variants: int       # GRPO group size
+    n_variants: int            # GRPO group size
 
-    # Current cycle state 
-    current_prompt: str   # best candidate from the last generator cycle
+    # Cycle-local state 
+    current_prompt: str        # winner produced by last generator cycle
     current_iteration: int
-
-    # feedback loop 
-    last_feedback: str    # verbal explanation of why last best won
-
-    # RiOT residual 
-    residual_content: str # beneficial constraints to preserve next cycle
-
-    # best candidate tracking 
+    last_feedback: str         # verbal explanation carried into next generation
+    residual_content: str      # RiOT: proven constraints to preserve
+    extra_samples: list
+    
+    # Best-so-far (promoted upward only, never regressed) 
     best_prompt: str
     best_reachability: float
     best_score: float
-    logprobs_available: Optional[bool]  # detected on first run by evaluator
+    logprobs_available: Optional[bool]   # detected on first evaluator call
 
-    # global best (returned to caller for UI) 
-    global_best_prompt: str
-    global_best_score: float
-    global_best_reachability: float
+    # Observability
+    grpo_group_mean: float             # group mean from last GRPO step
+    current_cycle_reachability: float  # this cycle's reachability (for UI timeline)
 
-    # GRPO observability 
-    grpo_group_mean: float  # group mean from last GRPO step
-
-    # baseline: set once, never changes 
+    # Baseline (set once, never changes) 
     baseline_score: float
     baseline_reachability: float
-
-    # full trial history across all cycles 
-    history: list
 
     # Terminal flags 
     target_reached: bool

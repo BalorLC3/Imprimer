@@ -1,11 +1,12 @@
-"""Group Relative Policy Optimization for prompt selection.
+"""
+Group Relative Policy Optimization for prompt selection.
 
+One cycle:
+  1. Generate N candidate prompts (1 generator call, already done upstream)
+  2. Score each candidate against the PRIMARY example in parallel (N evaluator calls)
+  3. Compute ELPR reward relative to the group mean
+  4. Return the winner
 
-Core idea (from GRPO research, 2025):
-    1. Generate a GROUP of N candidate prompts
-    2. Score every candidate in parallel
-    3. Apply ELPR (Exponential Linear Proximity Reward) relative to the group mean
-    4. Select the candidate with the highest group-relative reward
 """
 
 import math
@@ -13,51 +14,37 @@ from dataclasses import dataclass, field
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from core.chains.prompt_chain import ModelBackend
-from core.evaluator.scorer import OPEN_ENDED_TASKS, _creative_quality_heuristic
-from core.evaluator.embedder import similarity as embed_sim
+from core.chains.prompt_chain import ModelBackend, run_variant
+from core.evaluator.scorer import rank_score
 from utils.create_logger import get_logger
 
 logger = get_logger(__name__)
 
-
-GRPO_STEEP = 3.0   # Sigmoid steepness for ELPR reward shaping
-SSC_RUNS   = 2     # K runs for Semantic Self-Consistency per variant
-N_VARIANTS = 5     # Default group size
-
+GRPO_STEEP = 3.0
+N_VARIANTS = 4       # Fix 3: group of 4 gives stable group-mean baseline
 
 
 @dataclass
 class GRPOResult:
-    best_prompt:      str
-    best_score:       float   # raw weighted score of the winning candidate
-    best_reachability: float  # reachability of the winning candidate
-    best_grpo_reward: float   # ELPR reward of the winner (group-relative)
-    group_mean:       float   # mean raw score across the group (diversity signal)
-    group_std:        float   # std of raw scores (spread of candidates)
+    best_prompt:       str
+    best_score:        float
+    best_reachability: float
+    best_grpo_reward:  float
+    group_mean:        float
+    group_std:         float
     history: list = field(default_factory=list)
 
 
-
 def elpr_reward(score: float, group_mean: float, steep: float = GRPO_STEEP) -> float:
-    """
-    Exponential Linear Proximity Reward.
-    sigmoid(steep * (score - group_mean)) ∈ (0, 1).
-
-    Continuous and proximity-aware: a score just above the mean gets ~0.55,
-    a score far above gets close to 1.0. Never saturates to a flat signal.
-    """
     return round(1.0 / (1.0 + math.exp(-steep * (score - group_mean))), 4)
 
 
-def group_stats(scores: list[float]) -> tuple[float, float]:
-    """Returns (mean, std) of a score distribution."""
+def _group_stats(scores: list[float]) -> tuple[float, float]:
     if not scores:
         return 0.0, 0.0
-    mean = sum(scores) / len(scores)
+    mean     = sum(scores) / len(scores)
     variance = sum((s - mean) ** 2 for s in scores) / len(scores)
     return round(mean, 4), round(math.sqrt(variance), 4)
-
 
 
 def run_grpo(
@@ -68,41 +55,16 @@ def run_grpo(
     backend: ModelBackend,
     feedback: str = "",
     n_variants: int = N_VARIANTS,
-    ssc_runs: int = SSC_RUNS,
-    weights: Optional[dict] = None,
     current_best_prompt: Optional[str] = None,
     residual_content: str = "",
 ) -> GRPOResult:
     """
-    One GRPO optimization step.
-
-    Generates a group of N prompt candidates, scores them all in parallel,
-    applies group-relative ELPR reward shaping, and returns the winner.
-
-    Args:
-        residual_content: RiOT beneficial constraints extracted from the
-                          current best prompt. Injected into generation so
-                          the LLM preserves proven structure while exploring.
+    Generates N variants and selects the best via ELPR group-relative reward.
+    Scores each variant against the primary example only (1 call each, parallel).
     """
-    # Import helpers from rpe to avoid circular; rpe does not import grpo.
-    from core.optimizer.rpe import (
-        _generate_variants_with_residual,
-        _compute_ssc,
-    )
+    from core.optimizer.rpe import _generate_variants_with_residual
 
-    if weights is None:
-        if task in OPEN_ENDED_TASKS:
-            weights = {"ssc": 0.5, "reach": 0.3, "sim": 0.2}
-            logger.info("grpo weights: creative (SSC-dominant)")
-        elif expected_output:
-            weights = {"ssc": 0.2, "reach": 0.2, "sim": 0.6}
-            logger.info("grpo weights: deterministic (similarity-dominant)")
-        else:
-            weights = {"ssc": 0.4, "reach": 0.4, "sim": 0.2}
-            logger.info("grpo weights: deterministic no-ref (SSC+reach)")
-
-    anchor = current_best_prompt or base_prompt
-
+    anchor   = current_best_prompt or base_prompt
     variants = _generate_variants_with_residual(
         base_prompt=base_prompt,
         feedback=feedback,
@@ -116,45 +78,24 @@ def run_grpo(
     if not variants:
         logger.warning("grpo: no variants generated, returning anchor")
         return GRPOResult(
-            best_prompt=anchor,
-            best_score=0.0,
-            best_reachability=0.5,
-            best_grpo_reward=0.5,
-            group_mean=0.0,
-            group_std=0.0,
-            history=[],
+            best_prompt=anchor, best_score=0.0, best_reachability=0.5,
+            best_grpo_reward=0.5, group_mean=0.0, group_std=0.0,
         )
-
 
     def _score_one(variant_str: str) -> dict:
-        ssc, reach, sample_output = _compute_ssc(
-            prompt=variant_str,
-            input_example=input_example,
+        result = run_variant(
+            template=variant_str,
+            input_text=input_example,
             task=task,
             backend=backend,
-            k=ssc_runs,
+            temperature=0.0,
         )
-
-        if task in {"classify", "extract"} and expected_output:
-            norm_out = sample_output.strip().lower()
-            norm_exp = expected_output.strip().lower()
-            sim = 1.0 if norm_exp in norm_out else embed_sim(sample_output, expected_output)
-        elif task in OPEN_ENDED_TASKS:
-            sim = _creative_quality_heuristic(sample_output)
-        elif expected_output:
-            sim = embed_sim(sample_output, expected_output)
-        else:
-            sim = 0.5
-
-        raw = round(
-            weights["ssc"] * ssc + weights["reach"] * reach + weights["sim"] * sim, 4
-        )
+        s = rank_score(result, task=task, expected_output=expected_output)
         return {
-            "variant":       variant_str,
-            "ssc":           ssc,
-            "reachability":  reach,
-            "similarity":    sim,
-            "score":         raw,
+            "variant":      variant_str,
+            "reachability": s.reachability,
+            "similarity":   s.similarity,
+            "score":        s.combined,
         }
 
     history: list[dict] = []
@@ -166,40 +107,30 @@ def run_grpo(
                 r = future.result()
                 history.append(r)
                 logger.info(
-                    f"grpo variant={idx} ssc={r['ssc']:.4f} "
-                    f"reach={r['reachability']:.4f} "
-                    f"sim={r['similarity']:.4f} "
-                    f"score={r['score']:.4f}"
+                    f"grpo variant={idx} reach={r['reachability']:.4f} "
+                    f"sim={r['similarity']:.4f} score={r['score']:.4f}"
                 )
             except Exception as exc:
                 logger.error(f"grpo variant {idx} scoring failed: {exc}")
 
     if not history:
         return GRPOResult(
-            best_prompt=anchor,
-            best_score=0.0,
-            best_reachability=0.5,
-            best_grpo_reward=0.5,
-            group_mean=0.0,
-            group_std=0.0,
-            history=[],
+            best_prompt=anchor, best_score=0.0, best_reachability=0.5,
+            best_grpo_reward=0.5, group_mean=0.0, group_std=0.0, history=[],
         )
 
+    raw_scores      = [h["score"] for h in history]
+    g_mean, g_std   = _group_stats(raw_scores)
 
-    raw_scores = [h["score"] for h in history]
-    g_mean, g_std = group_stats(raw_scores)
-
-    # Annotate each candidate with its group-relative reward
     for h in history:
         h["grpo_reward"] = elpr_reward(h["score"], g_mean)
 
     winner = max(history, key=lambda h: h["grpo_reward"])
 
     logger.info(
-        f"grpo complete | group_mean={g_mean:.4f} std={g_std:.4f} "
-        f"winner_score={winner['score']:.4f} "
-        f"winner_grpo_reward={winner['grpo_reward']:.4f} "
-        f"winner_prompt={winner['variant'][:60]!r}"
+        f"grpo complete | mean={g_mean:.4f} std={g_std:.4f} "
+        f"winner={winner['score']:.4f} reward={winner['grpo_reward']:.4f} "
+        f"prompt={winner['variant'][:60]!r}"
     )
 
     return GRPOResult(

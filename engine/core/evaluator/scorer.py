@@ -1,10 +1,12 @@
 """
-Composite score computation for prompt variants.
+Score = 0.60 * reachability + 0.28 * quality + 0.12 * latency
 
-Three scoring dimensions:
-  reachability : token-level confidence via logprob sigmoid (primary signal)
-  quality      : task-specific output quality (similarity or creative heuristic)
-  latency      : inverse of inference time relative to a 1-second budget
+Reachability is the primary signal (RiOT paper: token-level logprob control).
+Quality is task-specific similarity or diversity heuristic.
+Latency is a practical budget constraint.
+SSC was removed: it measures output entropy at temp>0, which is a diagnostic
+tool (see stability.py), not an optimization signal. Its 10% weight was absorbed
+proportionally into the remaining three terms.
 """
 
 import math
@@ -13,7 +15,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import Optional
 
-from core.chains.prompt_chain import VariantResult, ModelBackend
+from core.chains.prompt_chain import VariantResult
 from core.evaluator.embedder import similarity as _similarity
 from utils.create_logger import get_logger
 
@@ -30,83 +32,96 @@ OPEN_ENDED_TASKS = {
     "rewrite",
 }
 
-LATENCY_BUDGET_MS  = 1000.0
-SIGMOID_STEEP      = 2.0
-REACHABLE_THRESHOLD = math.log(0.40)   # ln(0.40) ≈ -0.916
+LATENCY_BUDGET_MS   = 1000.0
+SIGMOID_STEEP       = 2.0
+REACHABLE_THRESHOLD = math.log(0.40)   # ln(0.40) = -0.916
+
+_W_REACH   = 0.60
+_W_QUALITY = 0.28
+_W_LATENCY = 0.12
+
+assert abs(_W_REACH + _W_QUALITY + _W_LATENCY - 1.0) < 1e-9, "weights must sum to 1"
 
 
 @dataclass
 class Score:
-    reachability:  float
-    latency_score: float
-    combined:      float
-    quality_score: Optional[float] = None
-    similarity:    Optional[float] = None
+    reachability: float
+    quality:      float
+    latency:      float
+    combined:     float
+    similarity:   Optional[float] = None   # filled for non-creative tasks
 
 
-
-def _compute_reachability(
+def compute_reachability(
     logprobs: list,
     baseline_logprobs: Optional[list] = None,
 ) -> float:
     """
-    Converts token-level logprobs into a reachability score ∈ (0, 1).
+    Token-level logprobs → reachability ∈ (0, 1).
 
-    With baseline: sigmoid over the improvement in average logprob.
-    Without baseline: sigmoid over the absolute average logprob vs threshold.
-
-    Returns 0.5 (neutral) when logprobs are empty.
+    With baseline: sigmoid over delta avg logprob (relative mode).
+    Without: sigmoid over absolute avg logprob vs REACHABLE_THRESHOLD.
+    Returns 0.5 neutral when logprobs are empty.
     """
     if not logprobs:
         return 0.5
 
-    def avg_logprob(lps: list) -> float:
+    def _avg(lps: list) -> float:
         valid = [t.get("logprob", -10.0) for t in lps if t.get("logprob") is not None]
         return sum(valid) / len(valid) if valid else -10.0
 
-    variant_conf = avg_logprob(logprobs)
+    conf = _avg(logprobs)
 
     if baseline_logprobs:
-        delta = variant_conf - avg_logprob(baseline_logprobs)
-        score = 1.0 / (1.0 + math.exp(-SIGMOID_STEEP * delta))
+        val = 1.0 / (1.0 + math.exp(-SIGMOID_STEEP * (conf - _avg(baseline_logprobs))))
     else:
-        score = 1.0 / (1.0 + math.exp(-SIGMOID_STEEP * (variant_conf - REACHABLE_THRESHOLD)))
+        val = 1.0 / (1.0 + math.exp(-SIGMOID_STEEP * (conf - REACHABLE_THRESHOLD)))
 
-    return round(score, 4)
-
+    return round(val, 4)
 
 
 def _creative_quality_heuristic(text: str) -> float:
-    """
-    Heuristic quality score for creative/open-ended tasks when no reference exists.
-    Combines lexical diversity and length adequacy.
-    """
     tokens = text.lower().split()
     if not tokens:
         return 0.0
-    diversity     = len(set(tokens)) / len(tokens)
-    length_score  = 1.0 / (1.0 + math.exp(-0.1 * (len(tokens) - 50)))
+    diversity    = len(set(tokens)) / len(tokens)
+    length_score = 1.0 / (1.0 + math.exp(-0.1 * (len(tokens) - 50)))
     return round(0.6 * diversity + 0.4 * length_score, 4)
 
 
+def _quality_and_similarity(text: str, task: str, expected_output: str) -> tuple[float, float]:
+    if task in OPEN_ENDED_TASKS:
+        return _creative_quality_heuristic(text), 0.5
 
-def score(
+    if not expected_output:
+        return 0.5, 0.5
+
+    if task in {"classify", "extract"}:
+        norm_out = text.strip().lower()
+        norm_exp = expected_output.strip().lower()
+        sim = 1.0 if norm_exp in norm_out else _similarity(text, expected_output)
+    else:
+        sim = _similarity(text, expected_output)
+
+    return round(sim, 4), round(sim, 4)
+
+
+def _combined(reach: float, quality: float, latency: float) -> float:
+    return round(_W_REACH * reach + _W_QUALITY * quality + _W_LATENCY * latency, 4)
+
+
+def rank_score(
     result: VariantResult,
-    baseline_result: Optional[VariantResult] = None,
     task: str = "",
     expected_output: str = "",
-    weights: Optional[dict] = None,
 ) -> Score:
     """
-    Produces a composite Score for a variant result.
+    Score a prompt variant. Used by GRPO for candidate ranking and by the
+    evaluator for authoritative promotion decisions.
 
-    Weight defaults give 60% weight to reachability as the primary control
-    signal, 20% to quality, and 20% to latency.
-
-    Similarity dead-weight fix:
-      When expected_output is absent, similarity is set to 0.5 (neutral)
-      rather than 0.0. Returning 0.0 dragged combined scores toward zero
-      regardless of reachability quality.
+    The cache is keyed on (text, task, expected_output) so parallel GRPO calls
+    and the subsequent evaluator call for the same winner pay zero cost on the
+    second hit.
     """
     cache_key = hashlib.sha256(
         json.dumps(
@@ -118,60 +133,20 @@ def score(
     if cache_key in _SCORE_CACHE:
         return _SCORE_CACHE[cache_key]
 
-    if weights is None:
-        weights = {"quality": 0.20, "reachability": 0.60, "latency": 0.20}
-
-    if baseline_result and baseline_result.logprobs:
-        reachability = _compute_reachability(
-            result.logprobs, baseline_logprobs=baseline_result.logprobs
-        )
-    elif result.logprobs:
-        reachability = _compute_reachability(result.logprobs)
-    else:
-        # Fallback: use semantic similarity as a proxy
-        reachability = _similarity(result.text, expected_output) if expected_output else 0.5
-
-    latency_score = max(0.0, 1.0 - result.latency_ms / LATENCY_BUDGET_MS)
-
-    quality_score  = 0.5
-    similarity_score = 0.0
-
-    if task in OPEN_ENDED_TASKS:
-        if result.logprobs:
-            # logprobs available: reachability is the quality signal; max quality
-            quality_score = 1.0
-        else:
-            quality_score = _creative_quality_heuristic(result.text)
-
-    else:
-        # strict tasks: classify, extract, qa, translate, ...
-        if expected_output:
-            if task in {"classify", "extract"}:
-                # mbedding similarity is misleading for short labels.
-                # "Positive" vs "Affirmative" scores ~0.3 by embedding but is correct
-                norm_out = result.text.strip().lower()
-                norm_exp = expected_output.strip().lower()
-                similarity_score = 1.0 if norm_exp in norm_out else _similarity(result.text, expected_output)
-            else:
-                similarity_score = _similarity(result.text, expected_output)
-        else:
-            similarity_score = 0.5   # neutral: no reference, no penalty
-
-        quality_score = similarity_score
-
-
-    combined = (
-        weights["quality"]      * quality_score
-        + weights["reachability"] * reachability
-        + weights["latency"]      * latency_score
-    )
+    reach        = compute_reachability(result.logprobs)
+    latency      = round(max(0.0, 1.0 - result.latency_ms / LATENCY_BUDGET_MS), 4)
+    quality, sim = _quality_and_similarity(result.text, task, expected_output)
 
     s = Score(
-        reachability  = reachability,
-        latency_score = round(latency_score, 3),
-        combined      = round(combined, 3),
-        quality_score = round(quality_score, 3),
-        similarity    = round(similarity_score, 3),
+        reachability = reach,
+        quality      = quality,
+        latency      = latency,
+        combined     = _combined(reach, quality, latency),
+        similarity   = sim,
     )
     _SCORE_CACHE[cache_key] = s
     return s
+
+
+# alias used by graph.py (baseline) and main.py (A/B evaluation)
+score = rank_score
