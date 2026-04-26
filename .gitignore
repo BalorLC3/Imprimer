@@ -40,9 +40,7 @@ dist/
 
 
 # Docs
-docs/assets/architecture.drawio.png
-docs/architecture.md
-docs/roadmap.md
+docs/mock/
 
 
 # Hugging Face cache
