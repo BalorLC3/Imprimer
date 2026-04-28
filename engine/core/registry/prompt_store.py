@@ -12,9 +12,29 @@ production by changing _get_conn() only. Nothing else changes.
 
 import sqlite3
 import time
-import json
+import os
 from pathlib import Path
 from dataclasses import dataclass
+
+import psycopg2
+from utils.create_logger import get_logger
+
+
+logger = get_logger(__name__)
+
+DB_PATH = Path("data/prompt_registry.db")
+
+
+
+import sqlite3
+import time
+import os
+from pathlib import Path
+from dataclasses import dataclass
+
+import psycopg2
+import psycopg2.extras
+
 from utils.create_logger import get_logger
 
 logger = get_logger(__name__)
@@ -22,23 +42,59 @@ logger = get_logger(__name__)
 DB_PATH = Path("data/prompt_registry.db")
 
 
-def _get_conn() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    return conn
+
+def _use_postgres():
+    return os.getenv("USE_POSTGRES", "false").lower() == "true"
+
+
+def _get_conn():
+    if _use_postgres():
+        return psycopg2.connect(
+            host=os.getenv("POSTGRES_HOST", "localhost"),
+            port=os.getenv("POSTGRES_PORT", "5432"),
+            user=os.getenv("POSTGRES_USER"),
+            password=os.getenv("POSTGRES_PASSWORD"),
+            dbname=os.getenv("POSTGRES_DB"),
+        )
+    else:
+        DB_PATH.parent.mkdir(exist_ok=True)
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        return conn
+
+
+def _q(query: str) -> str:
+    """Translate placeholders."""
+    return query.replace("?", "%s") if _use_postgres() else query
+
+
+def _execute(conn, query, params=()):
+    if _use_postgres():
+        with conn.cursor() as cur:
+            cur.execute(_q(query), params)
+            return cur
+    else:
+        return conn.execute(query, params)
+
+
+def _fetchone(conn, query, params=()):
+    if _use_postgres():
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(_q(query), params)
+            return cur.fetchone()
+    else:
+        return conn.execute(query, params).fetchone()
+
 
 
 def init_db() -> None:
-    """
-    Creates the registry table if it does not exist.
-    Called once at engine startup.
-    Safe to call multiple times - idempotent.
-    """
     with _get_conn() as conn:
-        conn.execute("""
+
+        id_type = "SERIAL PRIMARY KEY" if _use_postgres() else "INTEGER PRIMARY KEY AUTOINCREMENT"
+
+        _execute(conn, f"""
             CREATE TABLE IF NOT EXISTS evaluations (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                id            {id_type},
                 trace_id      TEXT NOT NULL,
                 task          TEXT NOT NULL,
                 backend       TEXT NOT NULL,
@@ -55,17 +111,13 @@ def init_db() -> None:
                 created_at    TEXT NOT NULL
             )
         """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_task
-            ON evaluations(task)
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_trace
-            ON evaluations(trace_id)
-        """)
-        conn.execute("""
+
+        _execute(conn, "CREATE INDEX IF NOT EXISTS idx_task ON evaluations(task)")
+        _execute(conn, "CREATE INDEX IF NOT EXISTS idx_trace ON evaluations(trace_id)")
+
+        _execute(conn, f"""
             CREATE TABLE IF NOT EXISTS optimization_trials (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                id              {id_type},
                 run_id          TEXT NOT NULL,
                 task            TEXT NOT NULL,
                 backend         TEXT NOT NULL,
@@ -81,15 +133,14 @@ def init_db() -> None:
                 created_at      TEXT NOT NULL
             )
         """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_optimization_run
-            ON optimization_trials(run_id)
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_optimization_task
-            ON optimization_trials(task)
-        """)
+
+        _execute(conn, "CREATE INDEX IF NOT EXISTS idx_optimization_run ON optimization_trials(run_id)")
+        _execute(conn, "CREATE INDEX IF NOT EXISTS idx_optimization_task ON optimization_trials(task)")
+
+        conn.commit()
+
     logger.info("Prompt registry initialized")
+
 
 
 @dataclass
@@ -109,15 +160,13 @@ class EvalRecord:
     gap_report: str = ""
 
 
+
 def save(record: EvalRecord) -> int:
-    """
-    Persists one evaluation result to the registry.
-    Returns the row ID for reference.
-    """
+    '''Persist evaluation'''
     created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
     with _get_conn() as conn:
-        cursor = conn.execute(
-            """
+        cur = _execute(conn, """
             INSERT INTO evaluations (
                 trace_id, task, backend,
                 variant_a, variant_b, winner,
@@ -126,106 +175,40 @@ def save(record: EvalRecord) -> int:
                 latency_a_ms, latency_b_ms,
                 gap_report, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-            (
-                record.trace_id,
-                record.task,
-                record.backend,
-                record.variant_a,
-                record.variant_b,
-                record.winner,
-                record.reachability_a,
-                record.reachability_b,
-                record.score_a,
-                record.score_b,
-                record.latency_a_ms,
-                record.latency_b_ms,
-                record.gap_report,
-                created_at,
-            ),
-        )
-        row_id = cursor.lastrowid
+        """, (
+            record.trace_id,
+            record.task,
+            record.backend,
+            record.variant_a,
+            record.variant_b,
+            record.winner,
+            record.reachability_a,
+            record.reachability_b,
+            record.score_a,
+            record.score_b,
+            record.latency_a_ms,
+            record.latency_b_ms,
+            record.gap_report,
+            created_at,
+        ))
 
-    logger.info(
-        f"trace={record.trace_id} "
-        f"registry_id={row_id} "
-        f"winner={record.winner} "
-        f"reachability_a={record.reachability_a} "
-        f"reachability_b={record.reachability_b}"
-    )
+        if _use_postgres():
+            cur.execute("SELECT LASTVAL()")
+            row_id = cur.fetchone()[0]
+        else:
+            row_id = cur.lastrowid
+
+        conn.commit()
+
     return row_id
 
 
-@dataclass
-class OptimizationTrialRecord:
-    run_id: str
-    task: str
-    backend: str
-    base_prompt: str
-    candidate_prompt: str
-    mutation: str
-    trial_number: int
-    score: float
-    reachability: float
-    similarity: float
-    latency_ms: float
-    is_best: bool = False
 
-
-def save_optimization_trial(record: OptimizationTrialRecord) -> int:
-    """
-    Persists one trial from the optimizer run.
-    Returns the row ID for reference.
-    """
-    created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+def best_variant_for_task(task: str) -> dict:
+    '''Query'''
     with _get_conn() as conn:
-        cursor = conn.execute(
-            """
-            INSERT INTO optimization_trials (
-                run_id, task, backend,
-                base_prompt, candidate_prompt, mutation,
-                trial_number, score, reachability,
-                similarity, latency_ms, is_best,
-                created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-            (
-                record.run_id,
-                record.task,
-                record.backend,
-                record.base_prompt,
-                record.candidate_prompt,
-                record.mutation,
-                record.trial_number,
-                record.score,
-                record.reachability,
-                record.similarity,
-                record.latency_ms,
-                int(record.is_best),
-                created_at,
-            ),
-        )
-        return cursor.lastrowid
 
-
-def mark_best_optimization_trial(run_id: str, trial_number: int) -> None:
-    """Marks the chosen best trial in the optimizer run."""
-    with _get_conn() as conn:
-        conn.execute(
-            """
-            UPDATE optimization_trials
-            SET is_best = 1
-            WHERE run_id = ? AND trial_number = ?
-        """,
-            (run_id, trial_number),
-        )
-
-
-def best_variant_for_task(task: str, limit: int = 10) -> dict:
-    with _get_conn() as conn:
-        # First, check the optimization_trials table (where RPE runs are saved)
-        row = conn.execute(
-            """
+        row = _fetchone(conn, """
             SELECT
                 candidate_prompt AS best_template,
                 AVG(score) AS avg_score,
@@ -236,14 +219,10 @@ def best_variant_for_task(task: str, limit: int = 10) -> dict:
             GROUP BY candidate_prompt
             ORDER BY avg_score DESC
             LIMIT 1
-        """,
-            (task,),
-        ).fetchone()
+        """, (task,))
 
-        # Fallback to the evaluations table (A/B comparisons) if no RPE data exists
         if not row:
-            row = conn.execute(
-                """
+            row = _fetchone(conn, """
                 SELECT
                     CASE WHEN winner = 'a' THEN variant_a ELSE variant_b END AS best_template,
                     COALESCE(AVG(CASE WHEN winner = 'a' THEN score_a ELSE score_b END), 0.0) AS avg_score,
@@ -254,9 +233,7 @@ def best_variant_for_task(task: str, limit: int = 10) -> dict:
                 GROUP BY best_template
                 ORDER BY avg_score DESC
                 LIMIT 1
-            """,
-                (task,),
-            ).fetchone()
+            """, (task,))
 
     if not row:
         return {}

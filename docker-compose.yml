@@ -8,37 +8,56 @@ services:
         proto: ./proto
     ports:
       - "50051:50051"
+    env_file:
+      - .env
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:1.5b}
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - USE_POSTGRES=true
+      - POSTGRES_HOST=db
+
     volumes:
       - engine_data:/app/data
       - engine_logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import grpc; print('ok')"]
       interval: 10s
       timeout: 5s
       retries: 3
-  
+
   gateway:
-      build:
-        context: .
-        dockerfile: gateway/Dockerfile
-        additional_contexts:
-          proto: ./proto
-      ports:
-        - "8080:8080"
-      environment:
-        - ENGINE_ADDR=engine:50051
-        - IMPRIMER_API_KEY=${IMPRIMER_API_KEY:-}
-      depends_on:
-        engine:
-          condition: service_healthy
-      restart: unless-stopped
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+      additional_contexts:
+        proto: ./proto
+    ports:
+      - "8080:8080"
+    environment:
+      - ENGINE_ADDR=engine:50051
+      - IMPRIMER_API_KEY=${IMPRIMER_API_KEY:-}
+    depends_on:
+      engine:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:15
+    env_file:
+      - .env
+    ports:
+      - "5432:5432"   # optional, only if you want local access
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $POSTGRES_USER"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
 volumes:
   engine_data:
   engine_logs:
+  postgres_data:
