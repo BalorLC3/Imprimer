@@ -141,7 +141,7 @@ def run_variant(
         llm = _build_chat_client(
             backend,
             model_env_var="OLLAMA_MODEL",
-            default_model="qwen2.5:1.5b",
+            default_model="llama3.2:1b",
             temperature=temperature,
             max_tokens=max_tokens,
             with_logprobs=True,
@@ -199,13 +199,13 @@ def call_llm(
     """
     Generator model (GENERATOR_MODEL / stronger, no logprobs).
     Called exactly once per cycle for variant generation.
-    Raises on failure — caller decides how to handle.
+    Raises on failure, caller decides how to handle.
     """
     try:
         llm = _build_chat_client(
             backend,
             model_env_var="GENERATOR_MODEL",
-            default_model="llama3.2:latest",
+            default_model="llama3.2:1b",
             temperature=temperature,
             max_tokens=max_tokens,
             with_logprobs=False,

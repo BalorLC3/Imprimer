@@ -8,8 +8,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from core.optimizer.state import PromptState
 from core.optimizer.grpo import run_grpo
 from core.optimizer.rpe import extract_residual_content
-from core.chains.prompt_chain import ModelBackend, run_variant
-from core.evaluator.scorer import rank_score, compute_reachability
+from core.chains.prompt_chain import ModelBackend, run_variant, call_llm
+from core.evaluator.scorer import rank_score
 from core.registry.prompt_store import OptimizationTrialRecord, save_optimization_trial
 from utils.create_logger import get_logger
 
@@ -19,10 +19,6 @@ logger = get_logger(__name__)
 def _structured_diff(previous: str, current: str) -> str:
     """
     Deterministic word-level diff instead of LLM reflection.
-
-    Zero model calls. Tells the generator what changed so it can build
-    on improvements rather than exploring random directions. More reliable
-    than asking a 1.5B model to explain its own output.
     """
     prev_words = set(previous.lower().split())
     curr_words = set(current.lower().split())
@@ -37,6 +33,10 @@ def _structured_diff(previous: str, current: str) -> str:
     if not parts:
         parts.append("Minor rephrasing, same core intent")
     return ". ".join(parts) + "."
+
+
+def _judge(previous: str, current: str) -> str:
+    ...
 
 
 def _score_across_examples(

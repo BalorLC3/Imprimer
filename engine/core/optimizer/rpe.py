@@ -6,15 +6,10 @@ import json
 import re
 from typing import Optional
 
-from core.chains.prompt_chain import ModelBackend, run_variants_parallel, call_llm
-from core.evaluator.scorer import compute_reachability
-from core.evaluator.embedder import pairwise_similarity
+from core.chains.prompt_chain import ModelBackend, call_llm
 from utils.create_logger import get_logger
 
 logger = get_logger(__name__)
-
-_SSC_RUNS        = 2
-_SSC_TEMPERATURE = 0.8
 
 _MIN_PROMPT_LEN = 20
 
@@ -121,15 +116,12 @@ def _generate_variants_with_residual(
             except json.JSONDecodeError:
                 pass
 
-        # Quoted fallback: handles models that write "prompt" instead of JSON
+        # quoted fallback: handles models that write "prompt" instead of JSON
         quoted = re.findall(r'"([^"]{20,})"', cleaned)
         valid  = [v.strip() for v in quoted if _is_valid_prompt(v, anchor)]
         if valid:
             logger.info(f"rpe: {len(valid)} variants (quoted fallback)")
             return valid[:n_variants]
-
-        # Line fallback removed: it was picking up the generator's own preamble
-        # sentences ("Here are four improved versions...") as prompt candidates.
 
     except Exception as exc:
         logger.warning(f"variant generation failed: {exc} — returning anchor")
