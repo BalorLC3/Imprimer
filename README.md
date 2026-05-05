@@ -31,7 +31,7 @@ $$r = \sigma\bigl(\alpha\,(\ell - \tau)\bigr)$$
 where $\tau = \log(0.40)$ is the reachability threshold and $\alpha$ controls the sharpness of the reachable/unreachable boundary. A token at $r \approx 1$ sits in the model's high-probability region. At $r \approx 0$ the prompt is fighting the model's prior.
 
 ### Demo
-A single iteration in the graph shows an optimized version of the original prompt
+A single iteration in the graph shows a (truncated) optimized version of the original prompt
 
 <p align="center">
   <img src="docs/examples/cli.png" height="600" alt="Single iteration imprimer"/>
