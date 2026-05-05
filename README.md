@@ -125,7 +125,7 @@ Gateway on `:8080`. Engine on `:50051` (internal). Gradio UI on `:7860`.
 **CLI**
 
 ```bash
-go install github.com/BalorLC3/Imprimer/gateway/cmd/imprimer@latest
+go install github.com/karimluna/imprimer/gateway/cmd/imprimer@latest
 
 imprimer evaluate --task classify \
   --input "Win a free iPhone now!" \
