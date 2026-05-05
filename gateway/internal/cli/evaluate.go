@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/BalorLC3/imprimer/gateway/internal/ui"
+	"github.com/karimluna/imprimer/gateway/internal/ui"
 	"github.com/spf13/cobra"
 )
 

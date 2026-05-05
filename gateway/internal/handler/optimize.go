@@ -3,9 +3,9 @@ package handler
 import (
 	"net/http"
 
-	gen "github.com/BalorLC3/imprimer/gateway/gen"
-	"github.com/BalorLC3/imprimer/gateway/internal/client"
-	"github.com/BalorLC3/imprimer/gateway/internal/httpx"
+	gen "github.com/karimluna/imprimer/gateway/gen"
+	"github.com/karimluna/imprimer/gateway/internal/client"
+	"github.com/karimluna/imprimer/gateway/internal/httpx"
 )
 
 // Handles POST /optimize
