@@ -112,7 +112,7 @@ Two services connected by gRPC. The proto file is the single source of truth: Go
 
 ## Quickstart
 
-**Prerequisites:** Docker Desktop, Ollama running with `qwen2.5:1b` and `llama3.2:latest` pulled.
+**Prerequisites:** Docker Desktop, Ollama running with `qwen2.5:1b` and `llama3.2:1b` pulled.
 
 ```bash
 export OLLAMA_HOST=0.0.0.0
@@ -151,7 +151,7 @@ python -m demo.app
 | Variable | Default | Description |
 |---|---|---|
 | `OLLAMA_MODEL` | `qwen2.5:1b` | Evaluator model (scoring, logprobs) |
-| `GENERATOR_MODEL` | `llama3.2:latest` | Generator model (variant generation) |
+| `GENERATOR_MODEL` | `llama3.2:1b` | Generator model (variant generation) |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama endpoint |
 | `OPENAI_API_KEY` | - | Required only for OpenAI backend |
 | `OPENAI_MODEL` | `gpt-4o-mini` | OpenAI model for both roles |
