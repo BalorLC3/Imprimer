@@ -141,7 +141,7 @@ def run_variant(
         llm = _build_chat_client(
             backend,
             model_env_var="OLLAMA_MODEL",
-            default_model="llama3.2:1b",
+            default_model="llama3.2:latest",
             temperature=temperature,
             max_tokens=max_tokens,
             with_logprobs=True,
@@ -205,7 +205,7 @@ def call_llm(
         llm = _build_chat_client(
             backend,
             model_env_var="GENERATOR_MODEL",
-            default_model="llama3.2:1b",
+            default_model="llama3.2:latest",
             temperature=temperature,
             max_tokens=max_tokens,
             with_logprobs=False,

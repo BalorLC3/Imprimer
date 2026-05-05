@@ -41,7 +41,7 @@ dist/
 
 # Docs
 docs/mock/
-
+*.cast
 
 # Hugging Face cache
 huggingface/

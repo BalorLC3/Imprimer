@@ -1,5 +1,6 @@
-services:
+version: '3.8'
 
+services:
   engine:
     build:
       context: ./engine
@@ -10,10 +11,9 @@ services:
       - "50051:50051"
     env_file:
       - .env
-    environment:
-      - USE_POSTGRES=false
-      - POSTGRES_HOST=db
-
+    # This allows the container to talk to Ollama on your physical machine
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - engine_data:/app/data
       - engine_logs:/app/logs
@@ -42,14 +42,16 @@ services:
 
   db:
     image: postgres:15
-    env_file:
-      - .env
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-imprimer}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-imprimer_secret}
+      - POSTGRES_DB=${POSTGRES_DB:-imprimer_registry}
     ports:
-      - "5432:5432"   # optional, only if you want local access
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $POSTGRES_USER"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
       interval: 5s
       timeout: 5s
       retries: 5

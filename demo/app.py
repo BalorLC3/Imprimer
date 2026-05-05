@@ -481,7 +481,7 @@ def query_best(task, limit):
         return str(e)
 
 
-OLLAMA_MODELS = ["qwen2.5:0.5b", "qwen2.5:1.5b", "qwen2.5:7b", "llama3.2:7b", "llama3.2:1b"]
+OLLAMA_MODELS = ["qwen2.5:0.5b", "qwen2.5:1.5b", "qwen2.5:7b", "llama3.2:7b", "llama3.2:latest"]
 OPENAI_MODELS = ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"]
 
 with gr.Blocks(title="Imprimer - LLM Prompt Control") as demo:
@@ -524,7 +524,7 @@ Optimizer: **GRPO + RiOT residuals** (group-relative reward shaping + semantic d
                 model_id = gr.Dropdown(
                     label="Ollama Model",
                     choices=OLLAMA_MODELS,
-                    value="llama3.2:1b",
+                    value="llama3.2:latest",
                     allow_custom_value=True,
                 )
 

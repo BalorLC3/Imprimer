@@ -59,13 +59,13 @@ class PromptEngineServicer(imprimer_pb2_grpc.PromptEngineServicer):
             template=request.variant_a,
             input_text=request.input,
             task=request.task,
-            backend=backend,
+            backend=ModelBackend(request.backend),
         )
         result_b = run_variant(
             template=request.variant_b,
             input_text=request.input,
             task=request.task,
-            backend=backend,
+            backend=ModelBackend(request.backend),
         )
 
         score_a = score(
@@ -151,6 +151,7 @@ class PromptEngineServicer(imprimer_pb2_grpc.PromptEngineServicer):
 
         return imprimer_pb2.BestResponse(
             task=result["task"],
+            best_template=result["best_template"], 
             avg_reachability=result["avg_reachability"],
             avg_score=result["avg_score"],
             evaluations=result["evaluations_sampled"],
@@ -161,7 +162,7 @@ class PromptEngineServicer(imprimer_pb2_grpc.PromptEngineServicer):
         logger.info(
             f"optimize task={request.task} "
             f"max_iterations={request.max_iterations} "
-            f"target_score={request.target_score} "
+            f"target_reachability={request.target_reachability} "
         )
 
         backend_str = request.backend.lower() if request.backend else "ollama"
@@ -176,27 +177,37 @@ class PromptEngineServicer(imprimer_pb2_grpc.PromptEngineServicer):
             )
             backend = ModelBackend.OLLAMA
 
-        # Go already raises BadRequest if n_trials is not greater than zero but just in case
-        result = graph_optimize(
+        # Create the generator
+        optimize_stream = graph_optimize(
             task=request.task,
             base_prompt=request.base_prompt,
             input_example=request.input_example,
             expected_output=request.expected_output,
             n_variants=request.n_variants,
-            backend=request.backend,
+            backend=ModelBackend(request.backend),
             target_reachability=request.target_reachability or 0.80,
             max_iterations=request.max_iterations if request.max_iterations > 0 else 3,
         )
 
+        # Iterate through the generator to get the final dictionary
+        final_result = None
+        for step_result in optimize_stream:
+            final_result = step_result
+            
+        # Fallback if the generator yielded nothing
+        if final_result is None:
+             raise RuntimeError("Optimizer returned no results.")
+
+        # Now you can subscript final_result!
         return imprimer_pb2.OptimizeResponse(
-            best_prompt=result["best_prompt"],
-            best_score=result["best_score"],
-            best_reachability=result["best_reachability"],
-            baseline_score=result["baseline_score"],
-            baseline_reachability=result["baseline_reachability"],
-            improvement=result["improvement"],
-            iterations_completed=result["iterations_completed"],
-            target_reached=result["target_reached"],
+            best_prompt=final_result["best_prompt"],
+            best_score=final_result["best_score"],
+            best_reachability=final_result["best_reachability"],
+            baseline_score=final_result["baseline_score"],
+            baseline_reachability=final_result["baseline_reachability"],
+            improvement=final_result["improvement"],
+            iterations_completed=final_result["iterations_completed"],
+            target_reached=final_result["target_reached"],
         )
 
     def AnalyzeStability(self, request, context):
@@ -217,7 +228,7 @@ class PromptEngineServicer(imprimer_pb2_grpc.PromptEngineServicer):
             prompt=request.prompt,
             input_text=request.input,
             task=request.task,
-            backend=backend,
+            backend=ModelBackend(request.backend),
             n_runs=request.n_runs if request.n_runs > 0 else 5,
             temperature=request.temperature if request.temperature > 0 else 0.7,
         )
